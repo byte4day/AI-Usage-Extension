@@ -31,6 +31,16 @@
       <summary>Show icon</summary>
       <description>Show the panel icon in the top bar</description>
     </key>
+    <key name="show-graph" type="b">
+      <default>true</default>
+      <summary>Show usage trend</summary>
+      <description>Show the usage history chart in each provider card</description>
+    </key>
+    <key name="graph-hours" type="i">
+      <default>24</default>
+      <summary>Trend window</summary>
+      <description>How many hours of history the chart covers</description>
+    </key>
     <key name="show-billing" type="b">
       <default>false</default>
       <summary>Show billing line</summary>

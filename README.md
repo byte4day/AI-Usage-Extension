@@ -11,8 +11,17 @@ Minimal top-panel extension for GNOME Shell 46–50.
 - Cursor Auto / API meters
 - Claude 5h / 7d OAuth usage
 - Codex primary / weekly rate limits
-- Plan tiers, reset countdown, optional billing/credits
-- Prefs for providers, panel target, refresh, proxy
+- A card per provider: brand icon, plan tier, headline percentage, both pool
+  meters and a reset countdown
+- Usage trend chart under each card, plotting both pools over the last 3h to
+  3 days from a rolling local history
+- Panel ring gauge that turns amber past 75% and red past 90%
+- Optional billing / credits line
+- Prefs for providers, panel target, chart window, refresh, proxy
+
+The chart history lives in `~/.cache/ai-usage/history.json`: percentages and
+timestamps only, never prompts or account data. Deleting it just restarts the
+charts.
 
 ### Auth (reuses what the CLIs already stored — no separate login)
 

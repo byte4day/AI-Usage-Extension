@@ -23,9 +23,44 @@ const CLAUDE_CLIENT_ID = '9d1c250a-e61b-44d9-88ed-5944d1962f5e';
 const CLAUDE_EXPIRY_SKEW_MS = 120 * 1000;
 const CODEX_API_URL = 'https://chatgpt.com/backend-api/wham/usage';
 const CODEX_PAGE_URL = 'https://chatgpt.com/codex';
-const TRACK_WIDTH = 280;
+const TRACK_WIDTH = 296;
 const RING_SIZE = 16;
 const RING_WIDTH = 2.5;
+
+// Everything the menu needs to draw a provider lives in one place, so a block,
+// its icon, its accent and its links can never drift apart.
+const PROVIDERS = {
+    cursor: {
+        label: 'Cursor',
+        icon: 'cursor-symbolic.svg',
+        accent: '#7e8aff',
+        page: CURSOR_PAGE_URL,
+        meters: ['Auto', 'API'],
+    },
+    claude: {
+        label: 'Claude',
+        icon: 'claude-symbolic.svg',
+        accent: '#d97757',
+        page: CLAUDE_PAGE_URL,
+        meters: ['5h', '7d'],
+    },
+    codex: {
+        label: 'Codex',
+        icon: 'codex-symbolic.svg',
+        accent: '#57bf9e',
+        page: CODEX_PAGE_URL,
+        meters: ['Primary', 'Weekly'],
+    },
+};
+const PROVIDER_IDS = ['cursor', 'claude', 'codex'];
+
+// History backing the sparkline charts.
+const HISTORY_MAX_POINTS = 720;
+const HISTORY_MAX_AGE = 7 * 24 * 3600;
+// Two refreshes landing seconds apart are one observation, not two.
+const HISTORY_MERGE_WINDOW = 45;
+const HISTORY_WRITE_INTERVAL = 60;
+const GRAPH_MIN_SPAN = 15 * 60;
 
 function severity(util) {
     if (util >= 90)
@@ -46,6 +81,11 @@ function severityRgb(util) {
 function colorRgb(c) {
     const scale = Math.max(c.red, c.green, c.blue) > 1 ? 255 : 1;
     return [c.red / scale, c.green / scale, c.blue / scale];
+}
+
+function hexRgb(hex) {
+    const n = parseInt(hex.replace('#', ''), 16);
+    return [((n >> 16) & 0xff) / 255, ((n >> 8) & 0xff) / 255, (n & 0xff) / 255];
 }
 
 function humanDuration(seconds) {
@@ -155,48 +195,151 @@ function pickPool(a, b, mode) {
     return (ka.utilization ?? 0) >= (kb.utilization ?? 0) ? ka : kb;
 }
 
+// Rolling record of every utilisation sample, so the menu can draw a real
+// trend instead of a single instantaneous number. Kept in the cache dir: it is
+// nice to have across restarts, and worthless enough to lose.
+class History {
+    constructor() {
+        this._dir = GLib.build_filenamev([GLib.get_user_cache_dir(), 'ai-usage']);
+        this._path = GLib.build_filenamev([this._dir, 'history.json']);
+        this._data = {};
+        for (const id of PROVIDER_IDS)
+            this._data[id] = [];
+        this._dirty = false;
+        this._lastWrite = 0;
+        this._load();
+    }
+
+    _load() {
+        try {
+            const [ok, contents] = GLib.file_get_contents(this._path);
+            if (!ok)
+                return;
+            const parsed = JSON.parse(new TextDecoder('utf-8').decode(contents));
+            for (const id of PROVIDER_IDS) {
+                const list = Array.isArray(parsed?.[id]) ? parsed[id] : [];
+                this._data[id] = list
+                    .filter(p => p && Number.isFinite(p.t))
+                    .map(p => ({
+                        t: p.t,
+                        a: Number.isFinite(p.a) ? p.a : null,
+                        b: Number.isFinite(p.b) ? p.b : null,
+                    }));
+                this._prune(id);
+            }
+        } catch (_e) {
+            // A missing or corrupt file just means we start collecting now.
+        }
+    }
+
+    _prune(id) {
+        const cutoff = Date.now() / 1000 - HISTORY_MAX_AGE;
+        let list = this._data[id].filter(p => p.t >= cutoff);
+        if (list.length > HISTORY_MAX_POINTS)
+            list = list.slice(list.length - HISTORY_MAX_POINTS);
+        this._data[id] = list;
+    }
+
+    push(id, a, b) {
+        if (!this._data[id])
+            return;
+        const clean = v => (typeof v === 'number' && Number.isFinite(v)
+            ? Math.max(0, Math.min(100, v))
+            : null);
+        const point = {t: Math.round(Date.now() / 1000), a: clean(a), b: clean(b)};
+        if (point.a === null && point.b === null)
+            return;
+        const list = this._data[id];
+        const last = list[list.length - 1];
+        if (last && point.t - last.t < HISTORY_MERGE_WINDOW)
+            list[list.length - 1] = point;
+        else
+            list.push(point);
+        this._prune(id);
+        this._dirty = true;
+    }
+
+    // Samples inside the requested window, plus the one just before it so the
+    // line enters from the left edge instead of starting mid-chart.
+    series(id, maxAgeSeconds) {
+        const list = this._data[id] ?? [];
+        const cutoff = Date.now() / 1000 - maxAgeSeconds;
+        const from = list.findIndex(p => p.t >= cutoff);
+        if (from < 0)
+            return [];
+        return list.slice(Math.max(0, from - 1));
+    }
+
+    flush(force = false) {
+        const now = Date.now() / 1000;
+        if (!this._dirty || (!force && now - this._lastWrite < HISTORY_WRITE_INTERVAL))
+            return;
+        try {
+            GLib.mkdir_with_parents(this._dir, 0o700);
+            const bytes = new TextEncoder().encode(JSON.stringify(this._data));
+            Gio.File.new_for_path(this._path).replace_contents(
+                bytes, null, false, Gio.FileCreateFlags.REPLACE_DESTINATION, null);
+            this._dirty = false;
+            this._lastWrite = now;
+        } catch (_e) {
+            // Losing history is not worth surfacing to the user.
+        }
+    }
+}
+
 class Meter {
     constructor(name) {
         this.root = new St.BoxLayout({vertical: true, style_class: 'cu-meter'});
         const row = new St.BoxLayout({style_class: 'cu-meter-row'});
-        this._name = new St.Label({text: name, style_class: 'cu-meter-name', x_expand: true});
-        this._pct = new St.Label({text: '...', style_class: 'cu-meter-pct'});
+        this._name = new St.Label({text: name, style_class: 'cu-meter-name'});
+        this._caption = new St.Label({
+            text: '',
+            style_class: 'cu-caption',
+            x_expand: true,
+            y_align: Clutter.ActorAlign.CENTER,
+        });
+        this._pct = new St.Label({text: '…', style_class: 'cu-meter-pct'});
         row.add_child(this._name);
+        row.add_child(this._caption);
         row.add_child(this._pct);
-        this._track = new St.BoxLayout({style_class: 'cu-track'});
+        this._track = new St.BoxLayout({style_class: 'cu-track', x_expand: true});
         this._fill = new St.Widget({style_class: 'cu-fill usage-low'});
         this._track.add_child(this._fill);
         this._ratio = 0;
         // The fill used to be sized from a hardcoded 260px constant, so it
         // drifted out of the track under any text-scaling factor.
         this._trackNotifyId = this._track.connect('notify::width', () => this._applyFill());
-        this._caption = new St.Label({text: '', style_class: 'cu-caption'});
         this.root.add_child(row);
         this.root.add_child(this._track);
-        this.root.add_child(this._caption);
     }
 
     _applyFill() {
         const width = this._track.get_width() || TRACK_WIDTH;
-        this._fill.set_width(Math.round(this._ratio * width));
+        const filled = Math.round(this._ratio * width);
+        // A sliver of colour still has to read as a rounded pill, so anything
+        // above zero gets at least the width of the track's corner radius.
+        this._fill.set_width(this._ratio > 0 ? Math.max(8, filled) : 0);
     }
 
     setValue(util, caption, displayValue = util, suffix = 'used') {
         const clamped = Math.max(0, Math.min(100, util));
         this._pct.text = `${displayValue.toFixed(0)}% ${suffix}`;
+        this._pct.style_class = `cu-meter-pct ${severity(util)}`;
         this._ratio = clamped / 100;
         this._applyFill();
         this._fill.style_class = `cu-fill ${severity(util)}`;
         this._caption.text = caption ?? '';
-        this._caption.visible = !!caption;
+        this._track.visible = true;
     }
 
     setMuted(detail = '-') {
         this._pct.text = detail;
+        this._pct.style_class = 'cu-meter-pct';
         this._ratio = 0;
         this._applyFill();
         this._fill.style_class = 'cu-fill';
-        this._caption.visible = false;
+        this._caption.text = '';
+        this._track.visible = false;
     }
 
     setVisible(v) {
@@ -213,35 +356,312 @@ class Meter {
     }
 }
 
-class ProviderBlock {
-    constructor(title, id) {
-        this.root = new St.BoxLayout({vertical: true, style_class: 'cu-provider'});
-        const header = new St.BoxLayout({style_class: 'cu-header'});
-        this._dot = new St.Widget({
-            style_class: `cu-dot cu-dot-${id}`,
-            y_align: Clutter.ActorAlign.CENTER,
-        });
-        this._title = new St.Label({text: title, style_class: 'cu-title', x_expand: true});
-        this._tier = new St.Label({text: '', style_class: 'cu-tier'});
-        header.add_child(this._dot);
-        header.add_child(this._title);
-        header.add_child(this._tier);
-        this.root.add_child(header);
-        this.meterA = new Meter('A');
-        this.meterB = new Meter('B');
-        this.root.add_child(this.meterA.root);
-        this.root.add_child(this.meterB.root);
-        this._billing = new St.Label({text: '', style_class: 'cu-billing'});
-        this._billing.visible = false;
-        this.root.add_child(this._billing);
-        this._error = new St.Label({text: '', style_class: 'cu-error'});
-        this._error.visible = false;
-        this.root.add_child(this._error);
+// Time-series chart of the two pools of one provider: dashed gridlines, a
+// filled primary series and a dashed secondary one, drawn straight in Cairo so
+// it follows the shell theme's foreground colour.
+const UsageGraph = GObject.registerClass(
+class UsageGraph extends St.DrawingArea {
+    _init(accent) {
+        super._init({style_class: 'cu-graph', x_expand: true});
+        this._accent = accent;
+        this._points = [];
+        this._invert = false;
     }
 
-    setMeterNames(a, b) {
-        this.meterA._name.text = a;
-        this.meterB._name.text = b;
+    setSeries(points, invert) {
+        this._points = points ?? [];
+        this._invert = !!invert;
+        this.queue_repaint();
+    }
+
+    // Contiguous runs of known values: a pool that briefly reported nothing
+    // leaves a gap in the line rather than a fabricated straight segment.
+    _segments(key) {
+        const segments = [];
+        let run = [];
+        for (const p of this._points) {
+            const v = p[key];
+            if (typeof v !== 'number' || !Number.isFinite(v)) {
+                if (run.length)
+                    segments.push(run);
+                run = [];
+                continue;
+            }
+            run.push({t: p.t, v: this._invert ? 100 - v : v});
+        }
+        if (run.length)
+            segments.push(run);
+        return segments;
+    }
+
+    vfunc_repaint() {
+        const cr = this.get_context();
+        try {
+            this._draw(cr);
+        } catch (_e) {
+            // Never let a paint failure take the whole menu down.
+        } finally {
+            cr.$dispose();
+        }
+    }
+
+    _draw(cr) {
+        const [w, h] = this.get_surface_size();
+        const [fr, fg, fb] = colorRgb(this.get_theme_node().get_foreground_color());
+        const padTop = 5;
+        const padBottom = 3;
+        const plot = Math.max(1, h - padTop - padBottom);
+        const yFor = v => padTop + (1 - Math.max(0, Math.min(100, v)) / 100) * plot;
+
+        cr.setLineWidth(1);
+        cr.setDash([3, 3], 0);
+        cr.setSourceRGBA(fr, fg, fb, 0.11);
+        for (const level of [25, 50, 75]) {
+            const y = Math.floor(yFor(level)) + 0.5;
+            cr.moveTo(0, y);
+            cr.lineTo(w, y);
+        }
+        cr.stroke();
+        cr.setDash([], 0);
+
+        const baseline = Math.floor(yFor(0)) + 0.5;
+        cr.setSourceRGBA(fr, fg, fb, 0.2);
+        cr.moveTo(0, baseline);
+        cr.lineTo(w, baseline);
+        cr.stroke();
+
+        if (this._points.length < 2)
+            return;
+
+        const first = this._points[0].t;
+        const span = Math.max(Date.now() / 1000 - first, GRAPH_MIN_SPAN);
+        // Keep the "now" marker inside the surface: a dot centred on the last
+        // pixel would be sliced in half by the actor's edge.
+        const right = Math.max(1, w - 5);
+        const xFor = t => Math.max(0, Math.min(right, ((t - first) / span) * right));
+        const [ar, ag, ab] = this._accent;
+
+        // Secondary pool sits behind, dashed and dimmed.
+        cr.setLineWidth(1.2);
+        cr.setLineJoin(Cairo.LineJoin.ROUND);
+        cr.setLineCap(Cairo.LineCap.ROUND);
+        cr.setDash([2.5, 2.5], 0);
+        cr.setSourceRGBA(ar, ag, ab, 0.55);
+        for (const run of this._segments('b')) {
+            if (run.length < 2)
+                continue;
+            run.forEach((p, i) => {
+                const x = xFor(p.t);
+                const y = yFor(p.v);
+                if (i === 0)
+                    cr.moveTo(x, y);
+                else
+                    cr.lineTo(x, y);
+            });
+            cr.stroke();
+        }
+        cr.setDash([], 0);
+
+        const runs = this._segments('a');
+        const gradient = new Cairo.LinearGradient(0, padTop, 0, h);
+        gradient.addColorStopRGBA(0, ar, ag, ab, 0.30);
+        gradient.addColorStopRGBA(1, ar, ag, ab, 0.02);
+        for (const run of runs) {
+            if (run.length < 2)
+                continue;
+            cr.moveTo(xFor(run[0].t), baseline);
+            for (const p of run)
+                cr.lineTo(xFor(p.t), yFor(p.v));
+            cr.lineTo(xFor(run[run.length - 1].t), baseline);
+            cr.closePath();
+            cr.setSource(gradient);
+            cr.fill();
+        }
+
+        cr.setLineWidth(1.8);
+        cr.setSourceRGBA(ar, ag, ab, 1);
+        for (const run of runs) {
+            if (run.length < 2)
+                continue;
+            run.forEach((p, i) => {
+                const x = xFor(p.t);
+                const y = yFor(p.v);
+                if (i === 0)
+                    cr.moveTo(x, y);
+                else
+                    cr.lineTo(x, y);
+            });
+            cr.stroke();
+        }
+
+        // Marker on the newest reading so "where am I now" is unmistakable.
+        const lastRun = runs[runs.length - 1];
+        if (lastRun?.length) {
+            const last = lastRun[lastRun.length - 1];
+            const x = xFor(last.t);
+            const y = yFor(last.v);
+            cr.setSourceRGBA(ar, ag, ab, 0.25);
+            cr.arc(x, y, 4.5, 0, 2 * Math.PI);
+            cr.fill();
+            cr.setSourceRGBA(ar, ag, ab, 1);
+            cr.arc(x, y, 2.2, 0, 2 * Math.PI);
+            cr.fill();
+        }
+    }
+});
+
+class ProviderBlock {
+    constructor(id, extensionPath) {
+        const info = PROVIDERS[id];
+        this.root = new St.BoxLayout({vertical: true, style_class: 'cu-card'});
+
+        const header = new St.BoxLayout({style_class: 'cu-header'});
+        this._icon = new St.Icon({
+            gicon: Gio.icon_new_for_string(
+                GLib.build_filenamev([extensionPath, 'icons', info.icon])),
+            style_class: 'cu-brand',
+            icon_size: 16,
+            y_align: Clutter.ActorAlign.CENTER,
+            style: `color: ${info.accent};`,
+        });
+        this._title = new St.Label({
+            text: info.label,
+            style_class: 'cu-title',
+            y_align: Clutter.ActorAlign.CENTER,
+        });
+        this._tier = new St.Label({
+            text: '',
+            style_class: 'cu-tier',
+            y_align: Clutter.ActorAlign.CENTER,
+        });
+        this._headline = new St.Label({
+            text: '…',
+            style_class: 'cu-headline',
+            x_expand: true,
+            x_align: Clutter.ActorAlign.END,
+            y_align: Clutter.ActorAlign.CENTER,
+        });
+        header.add_child(this._icon);
+        header.add_child(this._title);
+        header.add_child(this._tier);
+        header.add_child(this._headline);
+        this.root.add_child(header);
+
+        this.meterA = new Meter(info.meters[0]);
+        this.meterB = new Meter(info.meters[1]);
+        this.root.add_child(this.meterA.root);
+        this.root.add_child(this.meterB.root);
+
+        this._graphBox = new St.BoxLayout({vertical: true, style_class: 'cu-graph-box'});
+        this._graph = new UsageGraph(hexRgb(info.accent));
+        this._graphEmpty = new St.Label({
+            text: 'Collecting history…',
+            style_class: 'cu-graph-empty',
+            x_align: Clutter.ActorAlign.CENTER,
+        });
+        const legend = new St.BoxLayout({style_class: 'cu-legend'});
+        const swatch = (cls, opacity) => {
+            const w = new St.Widget({
+                style_class: `cu-swatch ${cls}`,
+                style: `background-color: ${info.accent};`,
+                y_align: Clutter.ActorAlign.CENTER,
+            });
+            w.opacity = opacity;
+            return w;
+        };
+        legend.add_child(swatch('cu-swatch-a', 255));
+        legend.add_child(new St.Label({
+            text: info.meters[0],
+            style_class: 'cu-legend-label',
+        }));
+        legend.add_child(swatch('cu-swatch-b', 140));
+        legend.add_child(new St.Label({
+            text: info.meters[1],
+            style_class: 'cu-legend-label',
+        }));
+        this._span = new St.Label({
+            text: '',
+            style_class: 'cu-legend-span',
+            x_expand: true,
+            x_align: Clutter.ActorAlign.END,
+        });
+        legend.add_child(this._span);
+        this._legend = legend;
+        this._graphBox.add_child(this._graph);
+        this._graphBox.add_child(this._graphEmpty);
+        this._graphBox.add_child(legend);
+        this.root.add_child(this._graphBox);
+
+        this._billing = new St.BoxLayout({style_class: 'cu-billing'});
+        this._billingIcon = new St.Icon({
+            icon_name: 'dialog-information-symbolic',
+            style_class: 'cu-billing-icon',
+            icon_size: 12,
+            y_align: Clutter.ActorAlign.CENTER,
+        });
+        this._billingLabel = new St.Label({text: '', style_class: 'cu-billing-label'});
+        this._billing.add_child(this._billingIcon);
+        this._billing.add_child(this._billingLabel);
+        this._billing.visible = false;
+        this.root.add_child(this._billing);
+
+        this._status = new St.BoxLayout({style_class: 'cu-status'});
+        this._statusIcon = new St.Icon({
+            icon_name: 'dialog-warning-symbolic',
+            style_class: 'cu-status-icon',
+            icon_size: 14,
+            y_align: Clutter.ActorAlign.CENTER,
+        });
+        this._statusLabel = new St.Label({
+            text: '',
+            style_class: 'cu-status-label',
+            y_align: Clutter.ActorAlign.CENTER,
+        });
+        this._status.add_child(this._statusIcon);
+        this._status.add_child(this._statusLabel);
+        this._status.visible = false;
+        this.root.add_child(this._status);
+    }
+
+    setTier(text, visible) {
+        this._tier.text = text ?? '';
+        this._tier.visible = !!text && visible;
+    }
+
+    setHeadline(text, cls = '') {
+        this._headline.text = text;
+        this._headline.style_class = `cu-headline ${cls}`.trim();
+    }
+
+    // One clear line replaces the meters when a provider cannot be read, so a
+    // login prompt never masquerades as 0% usage.
+    setStatus(text) {
+        this._statusLabel.text = text ?? '';
+        this._status.visible = !!text;
+        this.meterA.setVisible(!text);
+        this.meterB.setVisible(!text);
+        if (text) {
+            this._graphBox.visible = false;
+            this._billing.visible = false;
+        }
+    }
+
+    setBilling(text) {
+        this._billingLabel.text = text ?? '';
+        this._billing.visible = !!text;
+    }
+
+    setGraph(points, invert, spanText, visible) {
+        this._graphBox.visible = visible;
+        if (!visible)
+            return;
+        const enough = points.length >= 2;
+        this._graph.visible = enough;
+        this._graphEmpty.visible = !enough;
+        this._legend.visible = enough;
+        this._span.text = spanText ?? '';
+        if (enough)
+            this._graph.setSeries(points, invert);
     }
 
     setVisible(v) {
@@ -283,23 +703,39 @@ class Ring extends St.DrawingArea {
 
     vfunc_repaint() {
         const cr = this.get_context();
-        const [w, h] = this.get_surface_size();
-        const cx = w / 2;
-        const cy = h / 2;
-        const radius = Math.min(w, h) / 2 - RING_WIDTH / 2;
-        cr.setLineWidth(RING_WIDTH);
-        cr.setLineCap(Cairo.LineCap.ROUND);
-        const [fr, fg, fb] = colorRgb(this.get_theme_node().get_foreground_color());
-        cr.setSourceRGBA(fr, fg, fb, 0.2);
-        cr.arc(cx, cy, radius, 0, 2 * Math.PI);
-        cr.stroke();
-        if (this._util !== null && this._util > 0) {
-            const [r, g, b] = this._color ?? severityRgb(this._util);
-            cr.setSourceRGBA(r, g, b, 1);
-            cr.arc(cx, cy, radius, -Math.PI / 2, -Math.PI / 2 + (this._util / 100) * 2 * Math.PI);
+        try {
+            const [w, h] = this.get_surface_size();
+            const cx = w / 2;
+            const cy = h / 2;
+            const radius = Math.min(w, h) / 2 - RING_WIDTH / 2;
+            cr.setLineWidth(RING_WIDTH);
+            cr.setLineCap(Cairo.LineCap.ROUND);
+            const [fr, fg, fb] = colorRgb(this.get_theme_node().get_foreground_color());
+            if (this._util === null) {
+                // Nothing read yet: a dashed ring says "no value" instead of
+                // showing a convincing empty gauge.
+                cr.setDash([1.6, 2.4], 0);
+                cr.setSourceRGBA(fr, fg, fb, 0.35);
+                cr.arc(cx, cy, radius, 0, 2 * Math.PI);
+                cr.stroke();
+                cr.setDash([], 0);
+                return;
+            }
+            cr.setSourceRGBA(fr, fg, fb, 0.22);
+            cr.arc(cx, cy, radius, 0, 2 * Math.PI);
             cr.stroke();
+            if (this._util > 0) {
+                const [r, g, b] = this._color ?? severityRgb(this._util);
+                cr.setSourceRGBA(r, g, b, 1);
+                cr.arc(cx, cy, radius, -Math.PI / 2,
+                    -Math.PI / 2 + (this._util / 100) * 2 * Math.PI);
+                cr.stroke();
+            }
+        } catch (_e) {
+            // A failed paint must not take the panel down.
+        } finally {
+            cr.$dispose();
         }
-        cr.$dispose();
     }
 });
 
@@ -311,6 +747,7 @@ class CursorUsageIndicator extends PanelMenu.Button {
         this._settings = settings;
         this._openPreferences = openPreferences;
         this._session = this._createSession();
+        this._history = new History();
         this._last = {cursor: null, claude: null, codex: null};
         this._countdownTimer = null;
         this._timerId = null;
@@ -355,12 +792,15 @@ class CursorUsageIndicator extends PanelMenu.Button {
                 this._restartTimer();
             else if (key === 'proxy-url')
                 this._recreateSession();
-            else if (key === 'show-icon' || key === 'show-tier' || key === 'display-mode')
+            else if (key === 'show-icon' || key === 'show-tier' || key === 'display-mode') {
                 this._applyPanelChrome();
-            else if (
+                // The tier badge lives in both the panel and every card.
+                if (key === 'show-tier')
+                    this._renderAll();
+            } else if (
                 key === 'usage-display' || key === 'panel-window' || key === 'panel-provider' ||
-                key === 'show-billing' || key === 'show-cursor' || key === 'show-claude' ||
-                key === 'show-codex'
+                key === 'show-billing' || key === 'show-graph' || key === 'graph-hours' ||
+                key === 'show-cursor' || key === 'show-claude' || key === 'show-codex'
             ) {
                 this._applyProviderVisibility();
                 this._renderAll();
@@ -408,9 +848,8 @@ class CursorUsageIndicator extends PanelMenu.Button {
     }
 
     _applyProviderVisibility() {
-        this._cursorBlock.setVisible(this._settings.get_boolean('show-cursor'));
-        this._claudeBlock.setVisible(this._settings.get_boolean('show-claude'));
-        this._codexBlock.setVisible(this._settings.get_boolean('show-codex'));
+        for (const id of PROVIDER_IDS)
+            this._blocks[id].setVisible(this._settings.get_boolean(`show-${id}`));
     }
 
     _createSession() {
@@ -434,48 +873,64 @@ class CursorUsageIndicator extends PanelMenu.Button {
         item.add_child(root);
         this.menu.addMenuItem(item);
 
-        this._cursorBlock = new ProviderBlock('Cursor', 'cursor');
-        this._cursorBlock.setMeterNames('Auto', 'API');
-        this._claudeBlock = new ProviderBlock('Claude', 'claude');
-        this._claudeBlock.setMeterNames('5h', '7d');
-        this._codexBlock = new ProviderBlock('Codex', 'codex');
-        this._codexBlock.setMeterNames('Primary', 'Weekly');
-        root.add_child(this._cursorBlock.root);
-        root.add_child(this._claudeBlock.root);
-        root.add_child(this._codexBlock.root);
+        this._blocks = {};
+        for (const id of PROVIDER_IDS) {
+            const block = new ProviderBlock(id, this._extensionPath);
+            this._blocks[id] = block;
+            root.add_child(block.root);
+        }
         this._applyProviderVisibility();
 
         const footer = new St.BoxLayout({style_class: 'cu-footer'});
+        this._updatedIcon = new St.Icon({
+            icon_name: 'view-refresh-symbolic',
+            style_class: 'cu-updated-icon',
+            icon_size: 12,
+            y_align: Clutter.ActorAlign.CENTER,
+        });
         this._updated = new St.Label({
             text: '',
             style_class: 'cu-updated',
             x_expand: true,
             y_align: Clutter.ActorAlign.CENTER,
         });
+        footer.add_child(this._updatedIcon);
         footer.add_child(this._updated);
 
-        const mkLink = (label, fn) => {
+        // Icon + label buttons: the same targets as before, but they now read
+        // as buttons rather than stray words under the meters.
+        const mkLink = (label, iconName, fn) => {
+            const box = new St.BoxLayout({style_class: 'cu-link-box'});
+            box.add_child(new St.Icon({
+                icon_name: iconName,
+                icon_size: 12,
+                style_class: 'cu-link-icon',
+                y_align: Clutter.ActorAlign.CENTER,
+            }));
+            box.add_child(new St.Label({
+                text: label,
+                y_align: Clutter.ActorAlign.CENTER,
+            }));
             const btn = new St.Button({
-                label,
+                child: box,
                 style_class: 'cu-link',
                 can_focus: true,
                 reactive: true,
                 track_hover: true,
+                accessible_name: label,
             });
             btn.connect('clicked', fn);
             footer.add_child(btn);
             return btn;
         };
-        mkLink('Refresh', () => this._refreshUsage());
-        mkLink('Open', () => {
+        mkLink('Refresh', 'view-refresh-symbolic', () => this._refreshUsage());
+        mkLink('Open', 'web-browser-symbolic', () => {
             this.menu.close();
             const p = this._settings.get_string('panel-provider');
-            const url = p === 'claude' ? CLAUDE_PAGE_URL
-                : p === 'codex' ? CODEX_PAGE_URL
-                    : CURSOR_PAGE_URL;
-            Gio.AppInfo.launch_default_for_uri(url, null);
+            Gio.AppInfo.launch_default_for_uri(
+                PROVIDERS[p]?.page ?? CURSOR_PAGE_URL, null);
         });
-        mkLink('Prefs', () => {
+        mkLink('Prefs', 'preferences-system-symbolic', () => {
             this.menu.close();
             this._openPreferences();
         });
@@ -635,6 +1090,7 @@ class CursorUsageIndicator extends PanelMenu.Button {
                 return;
             }
             this._last.cursor = this._normalizeCursor(data);
+            this._recordHistory('cursor');
             this._renderProvider('cursor');
             this._renderPanel();
             this._scheduleCountdown();
@@ -847,6 +1303,7 @@ class CursorUsageIndicator extends PanelMenu.Button {
                 return;
             }
             this._last.claude = this._normalizeClaude(data, tier);
+            this._recordHistory('claude');
             this._renderProvider('claude');
             this._renderPanel();
             this._scheduleCountdown();
@@ -965,6 +1422,7 @@ class CursorUsageIndicator extends PanelMenu.Button {
                 return;
             }
             this._last.codex = this._normalizeCodex(data);
+            this._recordHistory('codex');
             this._renderProvider('codex');
             this._renderPanel();
             this._scheduleCountdown();
@@ -1041,24 +1499,23 @@ class CursorUsageIndicator extends PanelMenu.Button {
     // --- Render ---
 
     _blockFor(id) {
-        return id === 'claude' ? this._claudeBlock
-            : id === 'codex' ? this._codexBlock
-                : this._cursorBlock;
+        return this._blocks[id];
     }
 
     _setProviderUnavailable(id, detail) {
         this._last[id] = null;
         const block = this._blockFor(id);
-        block._tier.text = '';
-        block._tier.visible = false;
-        block.meterA.setVisible(true);
-        block.meterB.setVisible(false);
-        block.meterA.setMuted(detail);
-        block._billing.visible = false;
-        block._billing.text = '';
-        block._error.text = '';
-        block._error.visible = false;
+        block.setTier('', false);
+        block.setHeadline('—');
+        block.setBilling('');
+        block.setStatus(detail || 'Unavailable');
         this._renderPanel();
+    }
+
+    _displayValue(util) {
+        return this._settings.get_string('usage-display') === 'remaining'
+            ? 100 - util
+            : util;
     }
 
     _applyMeter(meter, win) {
@@ -1068,45 +1525,77 @@ class CursorUsageIndicator extends PanelMenu.Button {
         }
         meter.setVisible(true);
         const util = pct(win.utilization);
-        const display = this._settings.get_string('usage-display') === 'remaining'
-            ? 100 - util
-            : util;
         const suffix = this._settings.get_string('usage-display') === 'remaining'
             ? 'left'
             : 'used';
-        meter.setValue(util, relativeReset(win.resets_at), display, suffix);
+        meter.setValue(util, relativeReset(win.resets_at), this._displayValue(util), suffix);
     }
 
     _renderProvider(id) {
         const data = this._last[id];
         const block = this._blockFor(id);
         if (!data) {
-            this._setProviderUnavailable(id, '-');
+            this._setProviderUnavailable(id, '—');
             return;
         }
-        block._error.visible = false;
-        block._error.text = '';
-        block._tier.text = data.tier ?? '';
-        block._tier.visible = !!data.tier && this._settings.get_boolean('show-tier');
+        block.setStatus('');
+        block.setTier(data.tier ?? '', this._settings.get_boolean('show-tier'));
         if (data.isUnlimited) {
+            block.setHeadline('∞', 'usage-low');
             block.meterA.setVisible(true);
             block.meterB.setVisible(true);
             block.meterA.setMuted('unlimited');
             block.meterB.setMuted('unlimited');
         } else {
+            const headline = data.total && !data.total.missing
+                ? pct(data.total.utilization)
+                : Math.max(pct(data.a?.utilization), pct(data.b?.utilization));
+            block.setHeadline(
+                `${Math.round(this._displayValue(headline))}%`, severity(headline));
             this._applyMeter(block.meterA, data.a);
             this._applyMeter(block.meterB, data.b);
             if (!block.meterA.root.visible && !block.meterB.root.visible) {
                 block.meterA.setVisible(true);
                 block.meterA.setMuted('no data');
+                block.setHeadline('—');
             }
         }
-        block._billing.text = data.billing ?? '';
-        block._billing.visible = !!(data.billing && this._settings.get_boolean('show-billing'));
+        block.setBilling(
+            this._settings.get_boolean('show-billing') ? data.billing ?? '' : '');
+        this._renderGraph(id);
+    }
+
+    _recordHistory(id) {
+        const data = this._last[id];
+        if (!data || data.isUnlimited)
+            return;
+        const value = win => (win && !win.missing ? pct(win.utilization) : null);
+        this._history.push(id, value(data.a), value(data.b));
+        this._history.flush();
+    }
+
+    _renderGraph(id) {
+        const block = this._blockFor(id);
+        const show = this._settings.get_boolean('show-graph') && !!this._last[id] &&
+            !this._last[id].isUnlimited;
+        if (!show) {
+            block.setGraph([], false, '', false);
+            return;
+        }
+        const hours = Math.max(1, this._settings.get_int('graph-hours'));
+        const points = this._history.series(id, hours * 3600);
+        const span = points.length >= 2
+            ? `last ${humanDuration(Date.now() / 1000 - points[0].t)}`
+            : '';
+        block.setGraph(
+            points,
+            this._settings.get_string('usage-display') === 'remaining',
+            span,
+            true);
     }
 
     _renderAll() {
-        for (const id of ['cursor', 'claude', 'codex']) {
+        for (const id of PROVIDER_IDS) {
             if (this._last[id])
                 this._renderProvider(id);
         }
@@ -1241,12 +1730,11 @@ class CursorUsageIndicator extends PanelMenu.Button {
         this._settings = null;
         this._openPreferences = null;
         this._last = {cursor: null, claude: null, codex: null};
-        this._cursorBlock?.destroy();
-        this._claudeBlock?.destroy();
-        this._codexBlock?.destroy();
-        this._cursorBlock = null;
-        this._claudeBlock = null;
-        this._codexBlock = null;
+        this._history?.flush(true);
+        this._history = null;
+        for (const id of PROVIDER_IDS)
+            this._blocks?.[id]?.destroy();
+        this._blocks = null;
         super.destroy();
     }
 });
