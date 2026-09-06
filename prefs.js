@@ -27,10 +27,10 @@ export default class CursorUsagePreferences extends ExtensionPreferences {
     }
 
     _brandIcon(name) {
-        const path = GLib.build_filenamev([this.path, 'icons', `${name}-symbolic.svg`]);
+        const path = GLib.build_filenamev([this.path, 'icons', `${name}-color.svg`]);
         const image = Gtk.Image.new_from_gicon(
             Gio.FileIcon.new(Gio.File.new_for_path(path)));
-        image.add_css_class('dim-label');
+        image.set_pixel_size(22);
         return image;
     }
 

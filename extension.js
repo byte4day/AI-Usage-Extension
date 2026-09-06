@@ -16,7 +16,9 @@ const CURSOR_API_URL = 'https://cursor.com/api/usage-summary';
 const CURSOR_PAGE_URL = 'https://cursor.com/dashboard/usage';
 const CLAUDE_API_URL = 'https://api.anthropic.com/api/oauth/usage';
 const CLAUDE_PAGE_URL = 'https://claude.ai/settings/usage';
-const CLAUDE_TOKEN_URL = 'https://console.anthropic.com/v1/oauth/token';
+// Claude Code's CLI refreshes against api.anthropic.com — console.anthropic.com
+// rate-limits the same client id and used to leave the menu stuck on "expired".
+const CLAUDE_TOKEN_URL = 'https://api.anthropic.com/v1/oauth/token';
 // Public client id the Claude Code CLI uses for its own OAuth flow.
 const CLAUDE_CLIENT_ID = '9d1c250a-e61b-44d9-88ed-5944d1962f5e';
 // Renew slightly early so a refresh mid-request cannot 401 us.
@@ -32,21 +34,21 @@ const RING_WIDTH = 2.5;
 const PROVIDERS = {
     cursor: {
         label: 'Cursor',
-        icon: 'cursor-symbolic.svg',
+        icon: 'cursor-color.svg',
         accent: '#7e8aff',
         page: CURSOR_PAGE_URL,
         meters: ['Auto', 'API'],
     },
     claude: {
         label: 'Claude',
-        icon: 'claude-symbolic.svg',
+        icon: 'claude-color.svg',
         accent: '#d97757',
         page: CLAUDE_PAGE_URL,
         meters: ['5h', '7d'],
     },
     codex: {
         label: 'Codex',
-        icon: 'codex-symbolic.svg',
+        icon: 'codex-color.svg',
         accent: '#57bf9e',
         page: CODEX_PAGE_URL,
         meters: ['Primary', 'Weekly'],
@@ -118,14 +120,21 @@ function relativeReset(isoOrUnix) {
 
 function statusLabel(status) {
     if (status === 401 || status === 403)
-        return 'Session expired';
+        return 'Run claude to re-auth';
     if (status === 404)
         return 'Not available';
     if (status === 429)
-        return 'Rate limited';
+        return 'Rate limited — retry soon';
     if (status >= 500)
         return 'Service down';
     return `HTTP ${status}`;
+}
+
+// Claude stores expiresAt in ms; older dumps sometimes used seconds.
+function oauthExpiryMs(expiresAt) {
+    if (typeof expiresAt !== 'number' || !(expiresAt > 0))
+        return null;
+    return expiresAt < 1e12 ? expiresAt * 1000 : expiresAt;
 }
 
 function planLabel(value, fallback = 'AI') {
@@ -240,7 +249,7 @@ class History {
         this._data[id] = list;
     }
 
-    push(id, a, b) {
+    push(id, a, b, {force = false} = {}) {
         if (!this._data[id])
             return;
         const clean = v => (typeof v === 'number' && Number.isFinite(v)
@@ -251,7 +260,9 @@ class History {
             return;
         const list = this._data[id];
         const last = list[list.length - 1];
-        if (last && point.t - last.t < HISTORY_MERGE_WINDOW)
+        // Manual refresh should always leave a new sample so the chart moves;
+        // the timer still merges near-duplicates.
+        if (!force && last && point.t - last.t < HISTORY_MERGE_WINDOW)
             list[list.length - 1] = point;
         else
             list.push(point);
@@ -260,14 +271,28 @@ class History {
     }
 
     // Samples inside the requested window, plus the one just before it so the
-    // line enters from the left edge instead of starting mid-chart.
+    // line enters from the left edge instead of starting mid-chart. A lone
+    // reading is paired with a seed at the window start so the chart never
+    // sits on "Collecting history…" after the first successful fetch.
     series(id, maxAgeSeconds) {
         const list = this._data[id] ?? [];
-        const cutoff = Date.now() / 1000 - maxAgeSeconds;
-        const from = list.findIndex(p => p.t >= cutoff);
-        if (from < 0)
+        if (!list.length)
             return [];
-        return list.slice(Math.max(0, from - 1));
+        const now = Date.now() / 1000;
+        const cutoff = now - maxAgeSeconds;
+        const from = list.findIndex(p => p.t >= cutoff);
+        let points;
+        if (from < 0)
+            points = [list[list.length - 1]];
+        else
+            points = list.slice(Math.max(0, from - 1));
+        if (points.length === 1) {
+            const p = points[0];
+            const span = Math.min(maxAgeSeconds, GRAPH_MIN_SPAN);
+            const t0 = Math.min(p.t - 1, now - span);
+            return [{t: t0, a: p.a, b: p.b}, p];
+        }
+        return points;
     }
 
     flush(force = false) {
@@ -288,8 +313,9 @@ class History {
 }
 
 class Meter {
-    constructor(name) {
+    constructor(name, accent = null) {
         this.root = new St.BoxLayout({vertical: true, style_class: 'cu-meter'});
+        this._accent = accent;
         const row = new St.BoxLayout({style_class: 'cu-meter-row'});
         this._name = new St.Label({text: name, style_class: 'cu-meter-name'});
         this._caption = new St.Label({
@@ -328,6 +354,11 @@ class Meter {
         this._ratio = clamped / 100;
         this._applyFill();
         this._fill.style_class = `cu-fill ${severity(util)}`;
+        // Brand tint while healthy; severity colours take over once it hurts.
+        if (this._accent && util < 75)
+            this._fill.set_style(`background-color: ${this._accent};`);
+        else
+            this._fill.set_style('');
         this._caption.text = caption ?? '';
         this._track.visible = true;
     }
@@ -430,11 +461,12 @@ class UsageGraph extends St.DrawingArea {
         cr.lineTo(w, baseline);
         cr.stroke();
 
-        if (this._points.length < 2)
+        if (this._points.length < 1)
             return;
 
         const first = this._points[0].t;
-        const span = Math.max(Date.now() / 1000 - first, GRAPH_MIN_SPAN);
+        const lastT = this._points[this._points.length - 1].t;
+        const span = Math.max(Date.now() / 1000 - first, lastT - first, GRAPH_MIN_SPAN);
         // Keep the "now" marker inside the surface: a dot centred on the last
         // pixel would be sliced in half by the actor's edge.
         const right = Math.max(1, w - 5);
@@ -513,16 +545,19 @@ class UsageGraph extends St.DrawingArea {
 class ProviderBlock {
     constructor(id, extensionPath) {
         const info = PROVIDERS[id];
-        this.root = new St.BoxLayout({vertical: true, style_class: 'cu-card'});
+        this.root = new St.BoxLayout({
+            vertical: true,
+            style_class: `cu-card cu-card-${id}`,
+            style: `border-left: 3px solid ${info.accent};`,
+        });
 
         const header = new St.BoxLayout({style_class: 'cu-header'});
         this._icon = new St.Icon({
             gicon: Gio.icon_new_for_string(
                 GLib.build_filenamev([extensionPath, 'icons', info.icon])),
             style_class: 'cu-brand',
-            icon_size: 16,
+            icon_size: 20,
             y_align: Clutter.ActorAlign.CENTER,
-            style: `color: ${info.accent};`,
         });
         this._title = new St.Label({
             text: info.label,
@@ -533,6 +568,7 @@ class ProviderBlock {
             text: '',
             style_class: 'cu-tier',
             y_align: Clutter.ActorAlign.CENTER,
+            style: `color: ${info.accent};`,
         });
         this._headline = new St.Label({
             text: '…',
@@ -547,15 +583,15 @@ class ProviderBlock {
         header.add_child(this._headline);
         this.root.add_child(header);
 
-        this.meterA = new Meter(info.meters[0]);
-        this.meterB = new Meter(info.meters[1]);
+        this.meterA = new Meter(info.meters[0], info.accent);
+        this.meterB = new Meter(info.meters[1], info.accent);
         this.root.add_child(this.meterA.root);
         this.root.add_child(this.meterB.root);
 
         this._graphBox = new St.BoxLayout({vertical: true, style_class: 'cu-graph-box'});
         this._graph = new UsageGraph(hexRgb(info.accent));
         this._graphEmpty = new St.Label({
-            text: 'Collecting history…',
+            text: 'No history yet',
             style_class: 'cu-graph-empty',
             x_align: Clutter.ActorAlign.CENTER,
         });
@@ -655,7 +691,7 @@ class ProviderBlock {
         this._graphBox.visible = visible;
         if (!visible)
             return;
-        const enough = points.length >= 2;
+        const enough = points.length >= 1;
         this._graph.visible = enough;
         this._graphEmpty.visible = !enough;
         this._legend.visible = enough;
@@ -756,6 +792,7 @@ class CursorUsageIndicator extends PanelMenu.Button {
         this._tokenProc = null;
         this._pending = 0;
         this._claudeRenewing = false;
+        this._forceHistory = false;
 
         const box = new St.BoxLayout({style_class: 'cu-panel'});
         // A symbolic SVG recolours with the panel theme; the old PNG stayed a
@@ -923,7 +960,7 @@ class CursorUsageIndicator extends PanelMenu.Button {
             footer.add_child(btn);
             return btn;
         };
-        mkLink('Refresh', 'view-refresh-symbolic', () => this._refreshUsage());
+        mkLink('Refresh', 'view-refresh-symbolic', () => this._refreshUsage({forceHistory: true}));
         mkLink('Open', 'web-browser-symbolic', () => {
             this.menu.close();
             const p = this._settings.get_string('panel-provider');
@@ -960,9 +997,10 @@ class CursorUsageIndicator extends PanelMenu.Button {
         this._startTimer();
     }
 
-    _refreshUsage() {
+    _refreshUsage({forceHistory = false} = {}) {
         const cancellable = this._newCancellable();
         this._pending = 0;
+        this._forceHistory = !!forceHistory;
         this._markRefreshing();
         if (this._settings.get_boolean('show-cursor')) {
             this._pending++;
@@ -1165,9 +1203,9 @@ class CursorUsageIndicator extends PanelMenu.Button {
                     return;
                 }
                 const tier = planLabel(oauth.subscriptionType, 'CLAUDE');
-                const expired = typeof oauth.expiresAt === 'number' &&
-                    oauth.expiresAt > 0 &&
-                    oauth.expiresAt - CLAUDE_EXPIRY_SKEW_MS <= Date.now();
+                const expiresAt = oauthExpiryMs(oauth.expiresAt);
+                const expired = expiresAt !== null &&
+                    expiresAt - CLAUDE_EXPIRY_SKEW_MS <= Date.now();
                 // A stored token that has aged out used to leave the menu stuck
                 // on "HTTP 401" until the user next ran the CLI by hand.
                 if (expired && oauth.refreshToken) {
@@ -1231,9 +1269,12 @@ class CursorUsageIndicator extends PanelMenu.Button {
                 try {
                     const bytes = session.send_and_read_finish(result);
                     if (message.status_code !== 200) {
-                        done(null, message.status_code === 400 || message.status_code === 401
-                            ? 'Session expired'
-                            : `HTTP ${message.status_code}`);
+                        let err = `HTTP ${message.status_code}`;
+                        if (message.status_code === 429)
+                            err = 'Rate limited — retry soon';
+                        else if (message.status_code === 400 || message.status_code === 401)
+                            err = 'Run claude to re-auth';
+                        done(null, err);
                         return;
                     }
                     const data = JSON.parse(
@@ -1570,8 +1611,10 @@ class CursorUsageIndicator extends PanelMenu.Button {
         if (!data || data.isUnlimited)
             return;
         const value = win => (win && !win.missing ? pct(win.utilization) : null);
-        this._history.push(id, value(data.a), value(data.b));
-        this._history.flush();
+        this._history.push(id, value(data.a), value(data.b), {
+            force: !!this._forceHistory,
+        });
+        this._history.flush(!!this._forceHistory);
     }
 
     _renderGraph(id) {

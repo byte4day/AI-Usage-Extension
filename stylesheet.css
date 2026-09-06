@@ -16,7 +16,7 @@
 
 .cu-panel-pct {
     font-feature-settings: "tnum";
-    font-weight: 500;
+    font-weight: 600;
 }
 
 .cu-panel-pct.usage-high {
@@ -30,54 +30,53 @@
 .cu-panel-tier {
     font-size: 8pt;
     font-weight: bold;
-    color: rgba(128, 128, 128, 1.0);
+    color: rgba(190, 190, 190, 0.95);
 }
 
 /* Popup ---------------------------------------------------------------- */
 
 .cu-popup {
-    width: 320px;
-    spacing: 6px;
-    padding: 2px 0 0 0;
+    width: 340px;
+    spacing: 8px;
+    padding: 4px 0 0 0;
 }
 
 /* Each provider is a card, so three services read as three things instead of
-   one wall of bars. */
+   one wall of bars. Accent lives on the left edge from inline style. */
 .cu-card {
     spacing: 0;
-    padding: 10px 12px 11px 12px;
-    border-radius: 12px;
-    background-color: rgba(128, 128, 128, 0.13);
+    padding: 12px 14px 12px 12px;
+    border-radius: 14px;
+    background-color: rgba(128, 128, 128, 0.16);
 }
 
 .cu-header {
     spacing: 8px;
-    padding-bottom: 8px;
+    padding-bottom: 10px;
 }
 
 .cu-brand {
-    icon-size: 16px;
+    icon-size: 20px;
 }
 
 .cu-title {
-    font-weight: bold;
-    font-size: 10.5pt;
+    font-weight: 700;
+    font-size: 11pt;
 }
 
 /* Plan tier reads as a badge rather than loose grey text. */
 .cu-tier {
     font-size: 7.5pt;
     font-weight: bold;
-    color: rgba(128, 128, 128, 1.0);
-    background-color: rgba(128, 128, 128, 0.22);
-    border-radius: 5px;
-    padding: 1px 6px;
+    background-color: rgba(128, 128, 128, 0.28);
+    border-radius: 6px;
+    padding: 2px 7px;
 }
 
 /* Headline number: the one value worth reading from across the desk. */
 .cu-headline {
-    font-size: 13pt;
-    font-weight: bold;
+    font-size: 15pt;
+    font-weight: 700;
     font-feature-settings: "tnum";
 }
 
@@ -91,7 +90,7 @@
 
 .cu-meter {
     spacing: 4px;
-    margin-bottom: 9px;
+    margin-bottom: 10px;
 }
 
 .cu-meter-row {
@@ -100,14 +99,14 @@
 
 .cu-meter-name {
     font-size: 9pt;
-    font-weight: bold;
+    font-weight: 700;
 }
 
 .cu-meter-pct {
     font-feature-settings: "tnum";
     font-size: 9pt;
-    font-weight: 500;
-    color: rgba(128, 128, 128, 1.0);
+    font-weight: 600;
+    color: rgba(170, 170, 170, 1.0);
 }
 
 .cu-meter-pct.usage-high {
@@ -119,14 +118,14 @@
 }
 
 .cu-track {
-    height: 7px;
-    border-radius: 4px;
-    background-color: rgba(128, 128, 128, 0.28);
+    height: 8px;
+    border-radius: 5px;
+    background-color: rgba(128, 128, 128, 0.32);
 }
 
 .cu-fill {
-    height: 7px;
-    border-radius: 4px;
+    height: 8px;
+    border-radius: 5px;
     background-color: #33d17a;
 }
 
@@ -144,25 +143,28 @@
 
 .cu-caption {
     font-size: 8.5pt;
-    color: rgba(128, 128, 128, 1.0);
+    color: rgba(160, 160, 160, 1.0);
 }
 
 /* Trend chart ---------------------------------------------------------- */
 
 .cu-graph-box {
-    spacing: 2px;
-    margin-top: 1px;
+    spacing: 3px;
+    margin-top: 2px;
+    padding: 6px 4px 4px 4px;
+    border-radius: 10px;
+    background-color: rgba(0, 0, 0, 0.18);
 }
 
 .cu-graph {
-    height: 52px;
+    height: 58px;
 }
 
 .cu-graph-empty {
-    height: 52px;
+    height: 58px;
     font-size: 8.5pt;
-    color: rgba(128, 128, 128, 0.9);
-    padding-top: 18px;
+    color: rgba(150, 150, 150, 0.95);
+    padding-top: 20px;
 }
 
 .cu-legend {
@@ -185,35 +187,35 @@
 
 .cu-legend-label {
     font-size: 8pt;
-    color: rgba(128, 128, 128, 1.0);
+    color: rgba(160, 160, 160, 1.0);
     padding-right: 6px;
 }
 
 .cu-legend-span {
     font-size: 8pt;
-    color: rgba(128, 128, 128, 1.0);
+    color: rgba(160, 160, 160, 1.0);
 }
 
 /* Billing / status ----------------------------------------------------- */
 
 .cu-billing {
     spacing: 5px;
-    margin-top: 5px;
+    margin-top: 6px;
 }
 
 .cu-billing-icon {
     icon-size: 12px;
-    color: rgba(128, 128, 128, 1.0);
+    color: rgba(160, 160, 160, 1.0);
 }
 
 .cu-billing-label {
     font-size: 8.5pt;
-    color: rgba(128, 128, 128, 1.0);
+    color: rgba(160, 160, 160, 1.0);
 }
 
 .cu-status {
     spacing: 6px;
-    padding: 2px 0;
+    padding: 4px 0 2px 0;
 }
 
 .cu-status-icon {
@@ -223,7 +225,7 @@
 
 .cu-status-label {
     font-size: 9pt;
-    color: rgba(128, 128, 128, 1.0);
+    color: rgba(200, 200, 200, 1.0);
 }
 
 /* Footer --------------------------------------------------------------- */
@@ -231,30 +233,30 @@
 .cu-footer {
     spacing: 4px;
     margin-top: 2px;
-    padding: 4px 2px 2px 2px;
+    padding: 6px 2px 2px 2px;
 }
 
 .cu-updated-icon {
     icon-size: 12px;
-    color: rgba(128, 128, 128, 1.0);
+    color: rgba(160, 160, 160, 1.0);
     margin-right: 4px;
 }
 
 .cu-updated {
     font-size: 8.5pt;
-    color: rgba(128, 128, 128, 1.0);
+    color: rgba(160, 160, 160, 1.0);
 }
 
 /* Real pill buttons instead of bare text links. */
 .cu-link {
     font-size: 8.5pt;
-    background-color: rgba(128, 128, 128, 0.18);
-    border-radius: 7px;
-    padding: 4px 9px;
+    background-color: rgba(128, 128, 128, 0.22);
+    border-radius: 8px;
+    padding: 5px 10px;
 }
 
 .cu-link-box {
-    spacing: 5px;
+    spacing: 6px;
 }
 
 .cu-link-icon {
@@ -263,9 +265,9 @@
 
 .cu-link:hover,
 .cu-link:focus {
-    background-color: rgba(128, 128, 128, 0.32);
+    background-color: rgba(128, 128, 128, 0.36);
 }
 
 .cu-link:active {
-    background-color: rgba(128, 128, 128, 0.42);
+    background-color: rgba(128, 128, 128, 0.48);
 }
