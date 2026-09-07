@@ -25,7 +25,7 @@ const CLAUDE_CLIENT_ID = '9d1c250a-e61b-44d9-88ed-5944d1962f5e';
 const CLAUDE_EXPIRY_SKEW_MS = 120 * 1000;
 const CODEX_API_URL = 'https://chatgpt.com/backend-api/wham/usage';
 const CODEX_PAGE_URL = 'https://chatgpt.com/codex';
-const TRACK_WIDTH = 296;
+const TRACK_WIDTH = 150;
 const RING_SIZE = 16;
 const RING_WIDTH = 2.5;
 
@@ -34,35 +34,27 @@ const RING_WIDTH = 2.5;
 const PROVIDERS = {
     cursor: {
         label: 'Cursor',
-        icon: 'cursor-color.svg',
+        icon: 'cursor-symbolic.svg',
         accent: '#7e8aff',
         page: CURSOR_PAGE_URL,
         meters: ['Auto', 'API'],
     },
     claude: {
         label: 'Claude',
-        icon: 'claude-color.svg',
+        icon: 'claude-symbolic.svg',
         accent: '#d97757',
         page: CLAUDE_PAGE_URL,
         meters: ['5h', '7d'],
     },
     codex: {
         label: 'Codex',
-        icon: 'codex-color.svg',
+        icon: 'codex-symbolic.svg',
         accent: '#57bf9e',
         page: CODEX_PAGE_URL,
         meters: ['Primary', 'Weekly'],
     },
 };
 const PROVIDER_IDS = ['cursor', 'claude', 'codex'];
-
-// History backing the sparkline charts.
-const HISTORY_MAX_POINTS = 720;
-const HISTORY_MAX_AGE = 7 * 24 * 3600;
-// Two refreshes landing seconds apart are one observation, not two.
-const HISTORY_MERGE_WINDOW = 45;
-const HISTORY_WRITE_INTERVAL = 60;
-const GRAPH_MIN_SPAN = 15 * 60;
 
 function severity(util) {
     if (util >= 90)
@@ -83,11 +75,6 @@ function severityRgb(util) {
 function colorRgb(c) {
     const scale = Math.max(c.red, c.green, c.blue) > 1 ? 255 : 1;
     return [c.red / scale, c.green / scale, c.blue / scale];
-}
-
-function hexRgb(hex) {
-    const n = parseInt(hex.replace('#', ''), 16);
-    return [((n >> 16) & 0xff) / 255, ((n >> 8) & 0xff) / 255, (n & 0xff) / 255];
 }
 
 function humanDuration(seconds) {
@@ -115,7 +102,9 @@ function relativeReset(isoOrUnix) {
     const diff = target - Date.now();
     if (diff <= 0)
         return 'resetting';
-    return `resets in ${humanDuration(diff / 1000)}`;
+    // Short form: the countdown sits inline beside the bar, so "in 2h 14m" has
+    // to earn its width against the meter itself.
+    return `in ${humanDuration(diff / 1000)}`;
 }
 
 function statusLabel(status) {
@@ -204,139 +193,42 @@ function pickPool(a, b, mode) {
     return (ka.utilization ?? 0) >= (kb.utilization ?? 0) ? ka : kb;
 }
 
-// Rolling record of every utilisation sample, so the menu can draw a real
-// trend instead of a single instantaneous number. Kept in the cache dir: it is
-// nice to have across restarts, and worthless enough to lose.
-class History {
-    constructor() {
-        this._dir = GLib.build_filenamev([GLib.get_user_cache_dir(), 'ai-usage']);
-        this._path = GLib.build_filenamev([this._dir, 'history.json']);
-        this._data = {};
-        for (const id of PROVIDER_IDS)
-            this._data[id] = [];
-        this._dirty = false;
-        this._lastWrite = 0;
-        this._load();
-    }
-
-    _load() {
-        try {
-            const [ok, contents] = GLib.file_get_contents(this._path);
-            if (!ok)
-                return;
-            const parsed = JSON.parse(new TextDecoder('utf-8').decode(contents));
-            for (const id of PROVIDER_IDS) {
-                const list = Array.isArray(parsed?.[id]) ? parsed[id] : [];
-                this._data[id] = list
-                    .filter(p => p && Number.isFinite(p.t))
-                    .map(p => ({
-                        t: p.t,
-                        a: Number.isFinite(p.a) ? p.a : null,
-                        b: Number.isFinite(p.b) ? p.b : null,
-                    }));
-                this._prune(id);
-            }
-        } catch (_e) {
-            // A missing or corrupt file just means we start collecting now.
-        }
-    }
-
-    _prune(id) {
-        const cutoff = Date.now() / 1000 - HISTORY_MAX_AGE;
-        let list = this._data[id].filter(p => p.t >= cutoff);
-        if (list.length > HISTORY_MAX_POINTS)
-            list = list.slice(list.length - HISTORY_MAX_POINTS);
-        this._data[id] = list;
-    }
-
-    push(id, a, b, {force = false} = {}) {
-        if (!this._data[id])
-            return;
-        const clean = v => (typeof v === 'number' && Number.isFinite(v)
-            ? Math.max(0, Math.min(100, v))
-            : null);
-        const point = {t: Math.round(Date.now() / 1000), a: clean(a), b: clean(b)};
-        if (point.a === null && point.b === null)
-            return;
-        const list = this._data[id];
-        const last = list[list.length - 1];
-        // Manual refresh should always leave a new sample so the chart moves;
-        // the timer still merges near-duplicates.
-        if (!force && last && point.t - last.t < HISTORY_MERGE_WINDOW)
-            list[list.length - 1] = point;
-        else
-            list.push(point);
-        this._prune(id);
-        this._dirty = true;
-    }
-
-    // Samples inside the requested window, plus the one just before it so the
-    // line enters from the left edge instead of starting mid-chart. A lone
-    // reading is paired with a seed at the window start so the chart never
-    // sits on "Collecting history…" after the first successful fetch.
-    series(id, maxAgeSeconds) {
-        const list = this._data[id] ?? [];
-        if (!list.length)
-            return [];
-        const now = Date.now() / 1000;
-        const cutoff = now - maxAgeSeconds;
-        const from = list.findIndex(p => p.t >= cutoff);
-        let points;
-        if (from < 0)
-            points = [list[list.length - 1]];
-        else
-            points = list.slice(Math.max(0, from - 1));
-        if (points.length === 1) {
-            const p = points[0];
-            const span = Math.min(maxAgeSeconds, GRAPH_MIN_SPAN);
-            const t0 = Math.min(p.t - 1, now - span);
-            return [{t: t0, a: p.a, b: p.b}, p];
-        }
-        return points;
-    }
-
-    flush(force = false) {
-        const now = Date.now() / 1000;
-        if (!this._dirty || (!force && now - this._lastWrite < HISTORY_WRITE_INTERVAL))
-            return;
-        try {
-            GLib.mkdir_with_parents(this._dir, 0o700);
-            const bytes = new TextEncoder().encode(JSON.stringify(this._data));
-            Gio.File.new_for_path(this._path).replace_contents(
-                bytes, null, false, Gio.FileCreateFlags.REPLACE_DESTINATION, null);
-            this._dirty = false;
-            this._lastWrite = now;
-        } catch (_e) {
-            // Losing history is not worth surfacing to the user.
-        }
-    }
-}
-
+// One pool of one provider: a name, a thin bar, the percentage and the reset
+// countdown, all on a single line. Nothing here is decoration.
 class Meter {
     constructor(name, accent = null) {
-        this.root = new St.BoxLayout({vertical: true, style_class: 'cu-meter'});
+        this.root = new St.BoxLayout({style_class: 'cu-meter'});
         this._accent = accent;
-        const row = new St.BoxLayout({style_class: 'cu-meter-row'});
-        this._name = new St.Label({text: name, style_class: 'cu-meter-name'});
-        this._caption = new St.Label({
-            text: '',
-            style_class: 'cu-caption',
+        this._name = new St.Label({
+            text: name,
+            style_class: 'cu-meter-name',
+            y_align: Clutter.ActorAlign.CENTER,
+        });
+        this._track = new St.BoxLayout({
+            style_class: 'cu-track',
             x_expand: true,
             y_align: Clutter.ActorAlign.CENTER,
         });
-        this._pct = new St.Label({text: '…', style_class: 'cu-meter-pct'});
-        row.add_child(this._name);
-        row.add_child(this._caption);
-        row.add_child(this._pct);
-        this._track = new St.BoxLayout({style_class: 'cu-track', x_expand: true});
-        this._fill = new St.Widget({style_class: 'cu-fill usage-low'});
+        this._fill = new St.Widget({style_class: 'cu-fill'});
         this._track.add_child(this._fill);
+        this._caption = new St.Label({
+            text: '',
+            style_class: 'cu-caption',
+            y_align: Clutter.ActorAlign.CENTER,
+        });
+        this._pct = new St.Label({
+            text: '…',
+            style_class: 'cu-meter-pct',
+            y_align: Clutter.ActorAlign.CENTER,
+        });
+        this.root.add_child(this._name);
+        this.root.add_child(this._track);
+        this.root.add_child(this._caption);
+        this.root.add_child(this._pct);
         this._ratio = 0;
-        // The fill used to be sized from a hardcoded 260px constant, so it
+        // The fill used to be sized from a hardcoded pixel constant, so it
         // drifted out of the track under any text-scaling factor.
         this._trackNotifyId = this._track.connect('notify::width', () => this._applyFill());
-        this.root.add_child(row);
-        this.root.add_child(this._track);
     }
 
     _applyFill() {
@@ -344,12 +236,12 @@ class Meter {
         const filled = Math.round(this._ratio * width);
         // A sliver of colour still has to read as a rounded pill, so anything
         // above zero gets at least the width of the track's corner radius.
-        this._fill.set_width(this._ratio > 0 ? Math.max(8, filled) : 0);
+        this._fill.set_width(this._ratio > 0 ? Math.max(4, filled) : 0);
     }
 
-    setValue(util, caption, displayValue = util, suffix = 'used') {
+    setValue(util, caption, displayValue = util) {
         const clamped = Math.max(0, Math.min(100, util));
-        this._pct.text = `${displayValue.toFixed(0)}% ${suffix}`;
+        this._pct.text = `${displayValue.toFixed(0)}%`;
         this._pct.style_class = `cu-meter-pct ${severity(util)}`;
         this._ratio = clamped / 100;
         this._applyFill();
@@ -387,168 +279,15 @@ class Meter {
     }
 }
 
-// Time-series chart of the two pools of one provider: dashed gridlines, a
-// filled primary series and a dashed secondary one, drawn straight in Cairo so
-// it follows the shell theme's foreground colour.
-const UsageGraph = GObject.registerClass(
-class UsageGraph extends St.DrawingArea {
-    _init(accent) {
-        super._init({style_class: 'cu-graph', x_expand: true});
-        this._accent = accent;
-        this._points = [];
-        this._invert = false;
-    }
-
-    setSeries(points, invert) {
-        this._points = points ?? [];
-        this._invert = !!invert;
-        this.queue_repaint();
-    }
-
-    // Contiguous runs of known values: a pool that briefly reported nothing
-    // leaves a gap in the line rather than a fabricated straight segment.
-    _segments(key) {
-        const segments = [];
-        let run = [];
-        for (const p of this._points) {
-            const v = p[key];
-            if (typeof v !== 'number' || !Number.isFinite(v)) {
-                if (run.length)
-                    segments.push(run);
-                run = [];
-                continue;
-            }
-            run.push({t: p.t, v: this._invert ? 100 - v : v});
-        }
-        if (run.length)
-            segments.push(run);
-        return segments;
-    }
-
-    vfunc_repaint() {
-        const cr = this.get_context();
-        try {
-            this._draw(cr);
-        } catch (_e) {
-            // Never let a paint failure take the whole menu down.
-        } finally {
-            cr.$dispose();
-        }
-    }
-
-    _draw(cr) {
-        const [w, h] = this.get_surface_size();
-        const [fr, fg, fb] = colorRgb(this.get_theme_node().get_foreground_color());
-        const padTop = 5;
-        const padBottom = 3;
-        const plot = Math.max(1, h - padTop - padBottom);
-        const yFor = v => padTop + (1 - Math.max(0, Math.min(100, v)) / 100) * plot;
-
-        cr.setLineWidth(1);
-        cr.setDash([3, 3], 0);
-        cr.setSourceRGBA(fr, fg, fb, 0.11);
-        for (const level of [25, 50, 75]) {
-            const y = Math.floor(yFor(level)) + 0.5;
-            cr.moveTo(0, y);
-            cr.lineTo(w, y);
-        }
-        cr.stroke();
-        cr.setDash([], 0);
-
-        const baseline = Math.floor(yFor(0)) + 0.5;
-        cr.setSourceRGBA(fr, fg, fb, 0.2);
-        cr.moveTo(0, baseline);
-        cr.lineTo(w, baseline);
-        cr.stroke();
-
-        if (this._points.length < 1)
-            return;
-
-        const first = this._points[0].t;
-        const lastT = this._points[this._points.length - 1].t;
-        const span = Math.max(Date.now() / 1000 - first, lastT - first, GRAPH_MIN_SPAN);
-        // Keep the "now" marker inside the surface: a dot centred on the last
-        // pixel would be sliced in half by the actor's edge.
-        const right = Math.max(1, w - 5);
-        const xFor = t => Math.max(0, Math.min(right, ((t - first) / span) * right));
-        const [ar, ag, ab] = this._accent;
-
-        // Secondary pool sits behind, dashed and dimmed.
-        cr.setLineWidth(1.2);
-        cr.setLineJoin(Cairo.LineJoin.ROUND);
-        cr.setLineCap(Cairo.LineCap.ROUND);
-        cr.setDash([2.5, 2.5], 0);
-        cr.setSourceRGBA(ar, ag, ab, 0.55);
-        for (const run of this._segments('b')) {
-            if (run.length < 2)
-                continue;
-            run.forEach((p, i) => {
-                const x = xFor(p.t);
-                const y = yFor(p.v);
-                if (i === 0)
-                    cr.moveTo(x, y);
-                else
-                    cr.lineTo(x, y);
-            });
-            cr.stroke();
-        }
-        cr.setDash([], 0);
-
-        const runs = this._segments('a');
-        const gradient = new Cairo.LinearGradient(0, padTop, 0, h);
-        gradient.addColorStopRGBA(0, ar, ag, ab, 0.30);
-        gradient.addColorStopRGBA(1, ar, ag, ab, 0.02);
-        for (const run of runs) {
-            if (run.length < 2)
-                continue;
-            cr.moveTo(xFor(run[0].t), baseline);
-            for (const p of run)
-                cr.lineTo(xFor(p.t), yFor(p.v));
-            cr.lineTo(xFor(run[run.length - 1].t), baseline);
-            cr.closePath();
-            cr.setSource(gradient);
-            cr.fill();
-        }
-
-        cr.setLineWidth(1.8);
-        cr.setSourceRGBA(ar, ag, ab, 1);
-        for (const run of runs) {
-            if (run.length < 2)
-                continue;
-            run.forEach((p, i) => {
-                const x = xFor(p.t);
-                const y = yFor(p.v);
-                if (i === 0)
-                    cr.moveTo(x, y);
-                else
-                    cr.lineTo(x, y);
-            });
-            cr.stroke();
-        }
-
-        // Marker on the newest reading so "where am I now" is unmistakable.
-        const lastRun = runs[runs.length - 1];
-        if (lastRun?.length) {
-            const last = lastRun[lastRun.length - 1];
-            const x = xFor(last.t);
-            const y = yFor(last.v);
-            cr.setSourceRGBA(ar, ag, ab, 0.25);
-            cr.arc(x, y, 4.5, 0, 2 * Math.PI);
-            cr.fill();
-            cr.setSourceRGBA(ar, ag, ab, 1);
-            cr.arc(x, y, 2.2, 0, 2 * Math.PI);
-            cr.fill();
-        }
-    }
-});
-
+// A provider is a title line and its two meters — no card, no chart, no
+// framing. Everything optional (tier, billing) is a dim line that stays hidden
+// until it has something to say.
 class ProviderBlock {
     constructor(id, extensionPath) {
         const info = PROVIDERS[id];
         this.root = new St.BoxLayout({
             vertical: true,
-            style_class: `cu-card cu-card-${id}`,
-            style: `border-left: 3px solid ${info.accent};`,
+            style_class: `cu-provider cu-provider-${id}`,
         });
 
         const header = new St.BoxLayout({style_class: 'cu-header'});
@@ -556,25 +295,24 @@ class ProviderBlock {
             gicon: Gio.icon_new_for_string(
                 GLib.build_filenamev([extensionPath, 'icons', info.icon])),
             style_class: 'cu-brand',
-            icon_size: 20,
+            icon_size: 14,
             y_align: Clutter.ActorAlign.CENTER,
         });
         this._title = new St.Label({
             text: info.label,
             style_class: 'cu-title',
+            x_expand: true,
             y_align: Clutter.ActorAlign.CENTER,
         });
+        // Tier (when enabled) and the overall figure share the right edge.
         this._tier = new St.Label({
             text: '',
             style_class: 'cu-tier',
             y_align: Clutter.ActorAlign.CENTER,
-            style: `color: ${info.accent};`,
         });
         this._headline = new St.Label({
             text: '…',
             style_class: 'cu-headline',
-            x_expand: true,
-            x_align: Clutter.ActorAlign.END,
             y_align: Clutter.ActorAlign.CENTER,
         });
         header.add_child(this._icon);
@@ -588,73 +326,11 @@ class ProviderBlock {
         this.root.add_child(this.meterA.root);
         this.root.add_child(this.meterB.root);
 
-        this._graphBox = new St.BoxLayout({vertical: true, style_class: 'cu-graph-box'});
-        this._graph = new UsageGraph(hexRgb(info.accent));
-        this._graphEmpty = new St.Label({
-            text: 'No history yet',
-            style_class: 'cu-graph-empty',
-            x_align: Clutter.ActorAlign.CENTER,
-        });
-        const legend = new St.BoxLayout({style_class: 'cu-legend'});
-        const swatch = (cls, opacity) => {
-            const w = new St.Widget({
-                style_class: `cu-swatch ${cls}`,
-                style: `background-color: ${info.accent};`,
-                y_align: Clutter.ActorAlign.CENTER,
-            });
-            w.opacity = opacity;
-            return w;
-        };
-        legend.add_child(swatch('cu-swatch-a', 255));
-        legend.add_child(new St.Label({
-            text: info.meters[0],
-            style_class: 'cu-legend-label',
-        }));
-        legend.add_child(swatch('cu-swatch-b', 140));
-        legend.add_child(new St.Label({
-            text: info.meters[1],
-            style_class: 'cu-legend-label',
-        }));
-        this._span = new St.Label({
-            text: '',
-            style_class: 'cu-legend-span',
-            x_expand: true,
-            x_align: Clutter.ActorAlign.END,
-        });
-        legend.add_child(this._span);
-        this._legend = legend;
-        this._graphBox.add_child(this._graph);
-        this._graphBox.add_child(this._graphEmpty);
-        this._graphBox.add_child(legend);
-        this.root.add_child(this._graphBox);
-
-        this._billing = new St.BoxLayout({style_class: 'cu-billing'});
-        this._billingIcon = new St.Icon({
-            icon_name: 'dialog-information-symbolic',
-            style_class: 'cu-billing-icon',
-            icon_size: 12,
-            y_align: Clutter.ActorAlign.CENTER,
-        });
-        this._billingLabel = new St.Label({text: '', style_class: 'cu-billing-label'});
-        this._billing.add_child(this._billingIcon);
-        this._billing.add_child(this._billingLabel);
+        this._billing = new St.Label({text: '', style_class: 'cu-billing'});
         this._billing.visible = false;
         this.root.add_child(this._billing);
 
-        this._status = new St.BoxLayout({style_class: 'cu-status'});
-        this._statusIcon = new St.Icon({
-            icon_name: 'dialog-warning-symbolic',
-            style_class: 'cu-status-icon',
-            icon_size: 14,
-            y_align: Clutter.ActorAlign.CENTER,
-        });
-        this._statusLabel = new St.Label({
-            text: '',
-            style_class: 'cu-status-label',
-            y_align: Clutter.ActorAlign.CENTER,
-        });
-        this._status.add_child(this._statusIcon);
-        this._status.add_child(this._statusLabel);
+        this._status = new St.Label({text: '', style_class: 'cu-status'});
         this._status.visible = false;
         this.root.add_child(this._status);
     }
@@ -672,32 +348,17 @@ class ProviderBlock {
     // One clear line replaces the meters when a provider cannot be read, so a
     // login prompt never masquerades as 0% usage.
     setStatus(text) {
-        this._statusLabel.text = text ?? '';
+        this._status.text = text ?? '';
         this._status.visible = !!text;
         this.meterA.setVisible(!text);
         this.meterB.setVisible(!text);
-        if (text) {
-            this._graphBox.visible = false;
+        if (text)
             this._billing.visible = false;
-        }
     }
 
     setBilling(text) {
-        this._billingLabel.text = text ?? '';
+        this._billing.text = text ?? '';
         this._billing.visible = !!text;
-    }
-
-    setGraph(points, invert, spanText, visible) {
-        this._graphBox.visible = visible;
-        if (!visible)
-            return;
-        const enough = points.length >= 1;
-        this._graph.visible = enough;
-        this._graphEmpty.visible = !enough;
-        this._legend.visible = enough;
-        this._span.text = spanText ?? '';
-        if (enough)
-            this._graph.setSeries(points, invert);
     }
 
     setVisible(v) {
@@ -783,7 +444,6 @@ class CursorUsageIndicator extends PanelMenu.Button {
         this._settings = settings;
         this._openPreferences = openPreferences;
         this._session = this._createSession();
-        this._history = new History();
         this._last = {cursor: null, claude: null, codex: null};
         this._countdownTimer = null;
         this._timerId = null;
@@ -792,7 +452,6 @@ class CursorUsageIndicator extends PanelMenu.Button {
         this._tokenProc = null;
         this._pending = 0;
         this._claudeRenewing = false;
-        this._forceHistory = false;
 
         const box = new St.BoxLayout({style_class: 'cu-panel'});
         // A symbolic SVG recolours with the panel theme; the old PNG stayed a
@@ -831,12 +490,12 @@ class CursorUsageIndicator extends PanelMenu.Button {
                 this._recreateSession();
             else if (key === 'show-icon' || key === 'show-tier' || key === 'display-mode') {
                 this._applyPanelChrome();
-                // The tier badge lives in both the panel and every card.
+                // The tier lives in both the panel and every provider line.
                 if (key === 'show-tier')
                     this._renderAll();
             } else if (
                 key === 'usage-display' || key === 'panel-window' || key === 'panel-provider' ||
-                key === 'show-billing' || key === 'show-graph' || key === 'graph-hours' ||
+                key === 'show-billing' ||
                 key === 'show-cursor' || key === 'show-claude' || key === 'show-codex'
             ) {
                 this._applyProviderVisibility();
@@ -919,37 +578,19 @@ class CursorUsageIndicator extends PanelMenu.Button {
         this._applyProviderVisibility();
 
         const footer = new St.BoxLayout({style_class: 'cu-footer'});
-        this._updatedIcon = new St.Icon({
-            icon_name: 'view-refresh-symbolic',
-            style_class: 'cu-updated-icon',
-            icon_size: 12,
-            y_align: Clutter.ActorAlign.CENTER,
-        });
         this._updated = new St.Label({
             text: '',
             style_class: 'cu-updated',
             x_expand: true,
             y_align: Clutter.ActorAlign.CENTER,
         });
-        footer.add_child(this._updatedIcon);
         footer.add_child(this._updated);
 
-        // Icon + label buttons: the same targets as before, but they now read
-        // as buttons rather than stray words under the meters.
-        const mkLink = (label, iconName, fn) => {
-            const box = new St.BoxLayout({style_class: 'cu-link-box'});
-            box.add_child(new St.Icon({
-                icon_name: iconName,
-                icon_size: 12,
-                style_class: 'cu-link-icon',
-                y_align: Clutter.ActorAlign.CENTER,
-            }));
-            box.add_child(new St.Label({
-                text: label,
-                y_align: Clutter.ActorAlign.CENTER,
-            }));
+        // Text-only actions: the labels are the affordance, so no icons and no
+        // pill backgrounds until the pointer is actually on one.
+        const mkLink = (label, fn) => {
             const btn = new St.Button({
-                child: box,
+                label,
                 style_class: 'cu-link',
                 can_focus: true,
                 reactive: true,
@@ -960,14 +601,14 @@ class CursorUsageIndicator extends PanelMenu.Button {
             footer.add_child(btn);
             return btn;
         };
-        mkLink('Refresh', 'view-refresh-symbolic', () => this._refreshUsage({forceHistory: true}));
-        mkLink('Open', 'web-browser-symbolic', () => {
+        mkLink('Refresh', () => this._refreshUsage());
+        mkLink('Open', () => {
             this.menu.close();
             const p = this._settings.get_string('panel-provider');
             Gio.AppInfo.launch_default_for_uri(
                 PROVIDERS[p]?.page ?? CURSOR_PAGE_URL, null);
         });
-        mkLink('Prefs', 'preferences-system-symbolic', () => {
+        mkLink('Settings', () => {
             this.menu.close();
             this._openPreferences();
         });
@@ -997,10 +638,9 @@ class CursorUsageIndicator extends PanelMenu.Button {
         this._startTimer();
     }
 
-    _refreshUsage({forceHistory = false} = {}) {
+    _refreshUsage() {
         const cancellable = this._newCancellable();
         this._pending = 0;
-        this._forceHistory = !!forceHistory;
         this._markRefreshing();
         if (this._settings.get_boolean('show-cursor')) {
             this._pending++;
@@ -1128,7 +768,6 @@ class CursorUsageIndicator extends PanelMenu.Button {
                 return;
             }
             this._last.cursor = this._normalizeCursor(data);
-            this._recordHistory('cursor');
             this._renderProvider('cursor');
             this._renderPanel();
             this._scheduleCountdown();
@@ -1344,7 +983,6 @@ class CursorUsageIndicator extends PanelMenu.Button {
                 return;
             }
             this._last.claude = this._normalizeClaude(data, tier);
-            this._recordHistory('claude');
             this._renderProvider('claude');
             this._renderPanel();
             this._scheduleCountdown();
@@ -1463,7 +1101,6 @@ class CursorUsageIndicator extends PanelMenu.Button {
                 return;
             }
             this._last.codex = this._normalizeCodex(data);
-            this._recordHistory('codex');
             this._renderProvider('codex');
             this._renderPanel();
             this._scheduleCountdown();
@@ -1566,10 +1203,7 @@ class CursorUsageIndicator extends PanelMenu.Button {
         }
         meter.setVisible(true);
         const util = pct(win.utilization);
-        const suffix = this._settings.get_string('usage-display') === 'remaining'
-            ? 'left'
-            : 'used';
-        meter.setValue(util, relativeReset(win.resets_at), this._displayValue(util), suffix);
+        meter.setValue(util, relativeReset(win.resets_at), this._displayValue(util));
     }
 
     _renderProvider(id) {
@@ -1603,38 +1237,6 @@ class CursorUsageIndicator extends PanelMenu.Button {
         }
         block.setBilling(
             this._settings.get_boolean('show-billing') ? data.billing ?? '' : '');
-        this._renderGraph(id);
-    }
-
-    _recordHistory(id) {
-        const data = this._last[id];
-        if (!data || data.isUnlimited)
-            return;
-        const value = win => (win && !win.missing ? pct(win.utilization) : null);
-        this._history.push(id, value(data.a), value(data.b), {
-            force: !!this._forceHistory,
-        });
-        this._history.flush(!!this._forceHistory);
-    }
-
-    _renderGraph(id) {
-        const block = this._blockFor(id);
-        const show = this._settings.get_boolean('show-graph') && !!this._last[id] &&
-            !this._last[id].isUnlimited;
-        if (!show) {
-            block.setGraph([], false, '', false);
-            return;
-        }
-        const hours = Math.max(1, this._settings.get_int('graph-hours'));
-        const points = this._history.series(id, hours * 3600);
-        const span = points.length >= 2
-            ? `last ${humanDuration(Date.now() / 1000 - points[0].t)}`
-            : '';
-        block.setGraph(
-            points,
-            this._settings.get_string('usage-display') === 'remaining',
-            span,
-            true);
     }
 
     _renderAll() {
@@ -1773,8 +1375,6 @@ class CursorUsageIndicator extends PanelMenu.Button {
         this._settings = null;
         this._openPreferences = null;
         this._last = {cursor: null, claude: null, codex: null};
-        this._history?.flush(true);
-        this._history = null;
         for (const id of PROVIDER_IDS)
             this._blocks?.[id]?.destroy();
         this._blocks = null;

@@ -5,8 +5,6 @@ import GLib from 'gi://GLib';
 
 import {ExtensionPreferences} from 'resource:///org/gnome/Shell/Extensions/js/extensions/prefs.js';
 
-const GRAPH_HOURS = [3, 12, 24, 72];
-
 export default class CursorUsagePreferences extends ExtensionPreferences {
     // Combo rows all follow the same shape: a fixed list of values, mapped to
     // and from the string stored in GSettings.
@@ -126,44 +124,16 @@ export default class CursorUsagePreferences extends ExtensionPreferences {
 
         const showTier = new Adw.SwitchRow({
             title: 'Show plan tier',
-            subtitle: 'PRO, MAX, ULTRA … in the panel and on each card',
+            subtitle: 'PRO, MAX, ULTRA … in the panel and beside each provider',
         });
         settings.bind('show-tier', showTier, 'active', Gio.SettingsBindFlags.DEFAULT);
         panel.add(showTier);
 
         const menu = new Adw.PreferencesGroup({
             title: 'Menu',
-            description: 'The card for each provider in the drop-down.',
+            description: 'The drop-down under the panel indicator.',
         });
         lookPage.add(menu);
-
-        const graph = new Adw.SwitchRow({
-            title: 'Usage trend chart',
-            subtitle: 'Plot both pools over time under the meters',
-        });
-        settings.bind('show-graph', graph, 'active', Gio.SettingsBindFlags.DEFAULT);
-        menu.add(graph);
-
-        const hoursRow = new Adw.ComboRow({
-            title: 'Trend window',
-            subtitle: 'How far back the chart reaches',
-        });
-        const hoursModel = new Gtk.StringList();
-        for (const h of GRAPH_HOURS)
-            hoursModel.append(h < 24 ? `${h} hours` : `${h / 24} days`);
-        hoursRow.set_model(hoursModel);
-        const storedHours = settings.get_int('graph-hours');
-        const closest = GRAPH_HOURS.reduce(
-            (best, h, i) => (Math.abs(h - storedHours) < Math.abs(GRAPH_HOURS[best] - storedHours)
-                ? i
-                : best),
-            0);
-        hoursRow.set_selected(closest);
-        hoursRow.connect('notify::selected', () => {
-            settings.set_int('graph-hours', GRAPH_HOURS[hoursRow.get_selected()]);
-        });
-        settings.bind('show-graph', hoursRow, 'sensitive', Gio.SettingsBindFlags.GET);
-        menu.add(hoursRow);
 
         const billing = new Adw.SwitchRow({
             title: 'Billing and credits',
