@@ -2,6 +2,9 @@
 
 Show **Cursor**, **Claude**, and **Codex** usage from local sessions.
 
+[![License: MIT](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
+[![GNOME Shell](https://img.shields.io/badge/GNOME%20Shell-46–50-blue.svg)](https://extensions.gnome.org/)
+
 ## GNOME Shell
 
 Minimal top-panel extension for GNOME Shell 46–50.

@@ -2,6 +2,7 @@
   "name": "AI Usage",
   "description": "Show Cursor, Claude, and Codex usage in the GNOME top panel.\n\nReads local session tokens from disk (Cursor auth.json, Claude credentials, Codex auth.json) and fetches live usage. Does not spawn CLIs.\n\nNot affiliated with Cursor, Anthropic, or OpenAI.",
   "uuid": "cursor-usage@byte4day.github.io",
+  "version": 3,
   "shell-version": ["46", "47", "48", "49", "50"],
   "url": "https://github.com/byte4day/AI-Usage-Extension",
   "settings-schema": "org.gnome.shell.extensions.cursor-usage",
