@@ -52,7 +52,7 @@ AI Usage uses credentials already saved by the provider tools. You may enable an
 
 | Provider | Linux sources | Windows sources |
 | --- | --- | --- |
-| Cursor | `CURSOR_SESSION_TOKEN`, `~/.config/cursor/auth.json`, or Cursor desktop `state.vscdb` (requires `sqlite3`) | `CURSOR_SESSION_TOKEN`, Cursor auth files, or desktop `state.vscdb` |
+| Cursor | `CURSOR_SESSION_TOKEN`, `~/.config/cursor/auth.json`, or Cursor desktop `state.vscdb` (requires `sqlite3`) | `CURSOR_SESSION_TOKEN`, Cursor auth files, or desktop `state.vscdb` (requires `sqlite3.exe` on `PATH`) |
 | Claude Code | `CLAUDE_CODE_OAUTH_TOKEN` or `~/.claude/.credentials.json` | `CLAUDE_CODE_OAUTH_TOKEN`, Claude credentials files, or Windows Credential Manager |
 | Codex | `~/.codex/auth.json` | `%USERPROFILE%\.codex\auth.json` |
 
@@ -66,7 +66,7 @@ Usage requests go directly to provider HTTPS endpoints or your configured proxy.
 | --- | --- |
 | Login required, No auth, or Session expired | Sign in through the relevant CLI, then refresh AI Usage. |
 | Claude asks to reauthenticate | Run `claude` and complete sign-in. Check that its credential store is writable. |
-| Cursor desktop session is not found on Linux | Install `sqlite3`, then refresh. |
+| Cursor desktop session is not found | Install `sqlite3` on Linux or make `sqlite3.exe` available on `PATH` on Windows, then refresh. A Cursor auth file or `CURSOR_SESSION_TOKEN` also works. |
 | All providers show errors | Check connectivity and proxy URL. A `429` response means wait before refreshing. |
 | A pool is missing | The provider may not return that window for your plan. |
 | GNOME indicator is absent | Check that the extension is enabled and reload GNOME Shell. |
