@@ -203,6 +203,10 @@ static ProviderUsage FetchClaude(const Config& config) {
     std::string retryReason;
     if (auto renewed = ResolveClaudeCred(config.proxyUrl, &retryReason, /*force=*/true))
       response = request(renewed->accessToken);
+    else if (!retryReason.empty()) {
+      u.error = retryReason;
+      return u;
+    }
   }
   if (!response.ok()) {
     u.error = response.error.empty() ? HttpStatusLabel(response.status) : response.error;
@@ -258,14 +262,15 @@ const Pool* SelectPool(const ProviderUsage& data, const std::string& panelWindow
   // utilization directly, so handing one back reports a confident 0%.
   const Pool* a = data.a.missing ? nullptr : &data.a;
   const Pool* b = data.b.missing ? nullptr : &data.b;
+  const Pool* total = data.total.missing ? nullptr : &data.total;
   if (panelWindow == "api")
-    return b ? b : a;
+    return b ? b : (a ? a : total);
   if (panelWindow == "auto")
-    return a ? a : b;
+    return a ? a : (b ? b : total);
   if (panelWindow == "total")
-    return data.total.missing ? nullptr : &data.total;
+    return total ? total : (a && b ? (a->utilization >= b->utilization ? a : b) : (a ? a : b));
   if (!a)
-    return b;
+    return b ? b : total;
   if (!b)
     return a;
   return a->utilization >= b->utilization ? a : b;

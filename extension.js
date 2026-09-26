@@ -1181,22 +1181,30 @@ class CursorUsageIndicator extends PanelMenu.Button {
             GLib.PRIORITY_DEFAULT,
             cancellable,
             (session, result) => {
+                let bytes;
                 try {
-                    const bytes = session.send_and_read_finish(result);
-                    if (cancellable.is_cancelled())
-                        return;
-                    if (message.status_code !== 200) {
-                        cb(false, null, statusLabel(message.status_code),
-                            message.status_code);
-                        return;
-                    }
-                    const data = JSON.parse(new TextDecoder('utf-8').decode(bytes.get_data()));
-                    cb(true, data, null, 200);
+                    bytes = session.send_and_read_finish(result);
                 } catch (_e) {
                     if (cancellable.is_cancelled())
                         return;
                     cb(false, null, 'API failed', 0);
+                    return;
                 }
+                if (cancellable.is_cancelled())
+                    return;
+                if (message.status_code !== 200) {
+                    cb(false, null, statusLabel(message.status_code),
+                        message.status_code);
+                    return;
+                }
+                let data;
+                try {
+                    data = JSON.parse(new TextDecoder('utf-8').decode(bytes.get_data()));
+                } catch (_e) {
+                    cb(false, null, 'Invalid API response', 200);
+                    return;
+                }
+                cb(true, data, null, 200);
             }
         );
     }
@@ -1316,7 +1324,8 @@ class CursorUsageIndicator extends PanelMenu.Button {
             return snap.total && !snap.total.missing
                 ? snap.total
                 : pickPool(snap.a, snap.b, 'max');
-        return pickPool(snap.a, snap.b, mode);
+        return pickPool(snap.a, snap.b, mode) ??
+            (snap.total && !snap.total.missing ? snap.total : null);
     }
 
     _renderPanel() {
