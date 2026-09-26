@@ -44,7 +44,9 @@
 }
 
 .cu-provider {
-    spacing: 3px;
+    spacing: 4px;
+    padding-bottom: 6px;
+    border-bottom: 1px solid rgba(128, 128, 128, 0.22);
 }
 
 .cu-header {
@@ -58,6 +60,7 @@
 
 .cu-title {
     font-weight: 600;
+    font-size: 10pt;
 }
 
 .cu-tier {
@@ -69,6 +72,7 @@
 .cu-headline {
     font-feature-settings: "tnum";
     font-weight: 600;
+    font-size: 10pt;
 }
 
 .cu-headline.usage-high {

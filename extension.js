@@ -286,7 +286,7 @@ class ProviderBlock {
     constructor(id, extensionPath) {
         const info = PROVIDERS[id];
         this.root = new St.BoxLayout({
-            vertical: true,
+            orientation: Clutter.Orientation.VERTICAL,
             style_class: `cu-provider cu-provider-${id}`,
         });
 
@@ -565,7 +565,10 @@ class CursorUsageIndicator extends PanelMenu.Button {
 
     _createMenu() {
         const item = new PopupMenu.PopupBaseMenuItem({reactive: false, can_focus: false});
-        const root = new St.BoxLayout({vertical: true, style_class: 'cu-popup'});
+        const root = new St.BoxLayout({
+            orientation: Clutter.Orientation.VERTICAL,
+            style_class: 'cu-popup',
+        });
         item.add_child(root);
         this.menu.addMenuItem(item);
 

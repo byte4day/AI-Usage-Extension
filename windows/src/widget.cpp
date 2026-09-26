@@ -868,7 +868,8 @@ void Widget::DrawCard(void* graphics, const Layout& l) {
         caption = Ellipsize(g, caption, smallFont, capMax);
         Gdiplus::RectF cb;
         g.MeasureString(caption.c_str(), -1, &smallFont, Gdiplus::PointF(0, 0), &cb);
-        DrawLabelRight(g, caption, smallFont, right, cy - cb.Height / 2.f, kMuted);
+        DrawLabelRight(g, caption, smallFont, right, cy - cb.Height / 2.f,
+                       snap ? kMuted : kHigh);
       }
     }
     return;
@@ -902,7 +903,7 @@ void Widget::DrawCard(void* graphics, const Layout& l) {
 
   if (sections.empty()) {
     DrawLabel(g, L"No providers enabled", bodyFont, left, y + S(10), kMuted);
-    DrawLabel(g, L"Turn one on in Prefs.", smallFont, left, y + S(26), kFaint);
+    DrawLabel(g, L"Turn one on in Preferences.", smallFont, left, y + S(26), kFaint);
   }
 
   for (const Section& section : sections) {

@@ -9,10 +9,10 @@ See **Cursor, Claude Code, and Codex** usage without opening three apps. AI Usag
 | | Linux | Windows |
 | --- | --- | --- |
 | Interface | GNOME Shell top-panel menu | Floating widget and tray icon |
-| Supported desktop | GNOME Shell 46–50 | Windows 10/11 |
+| Supported desktop | GNOME Shell 46–51 | Windows 10/11 |
 | Usage | Cursor Auto/API, Claude 5h/7d, Codex primary/weekly | Same |
 | Settings | GNOME Extensions preferences | Widget or tray Settings |
-| Release file | `cursor-usage@byte4day.github.io.shell-extension.zip` | `CursorUsage.exe` |
+| Release file | `AI-Usage-Extension.zip` | `AI-Usage-Extension.exe` |
 
 The percentage is **used** by default; you can switch to **remaining**. Missing pools appear as unavailable rather than 0%. A reset countdown appears when the provider returns a reset time. The ring and warning colors use 75% and 90% thresholds. Optional billing or credits lines appear only when the provider returns those fields.
 
@@ -21,7 +21,7 @@ The percentage is **used** by default; you can switch to **remaining**. Missing 
 This is a **GNOME Shell extension**, not a general Linux desktop app. Sign in to the provider CLIs you want to show, then download the GNOME ZIP from the [latest release](https://github.com/byte4day/AI-Usage-Extension/releases/latest). In its download directory, run:
 
 ```bash
-gnome-extensions install -f cursor-usage@byte4day.github.io.shell-extension.zip
+gnome-extensions install -f AI-Usage-Extension.zip
 gnome-extensions enable cursor-usage@byte4day.github.io
 ```
 
@@ -33,7 +33,7 @@ To build from source, install `gnome-extensions`, `glib-compile-schemas`, and `z
 
 ## Install on Windows
 
-Sign in to the provider CLIs you want to show. Download `CursorUsage.exe` from the [latest release](https://github.com/byte4day/AI-Usage-Extension/releases/latest) and run it. No installer is required. Open **Settings** from the widget or tray icon to choose providers, compact readout, opacity, always-on-top, proxy, and used or remaining percentages.
+Sign in to the provider CLIs you want to show. Download `AI-Usage-Extension.exe` from the [latest release](https://github.com/byte4day/AI-Usage-Extension/releases/latest) and run it. No installer is required. Open **Settings** from the widget or tray icon to choose providers, compact readout, opacity, always-on-top, proxy, and used or remaining percentages.
 
 Preferences are saved at `%APPDATA%\CursorUsage\config.ini`. To reset them, exit the widget and delete that file. To uninstall, exit and delete the executable and, if desired, the configuration directory. Windows may warn about an unsigned downloadable executable; inspect the source or build it yourself if you prefer.
 
@@ -44,7 +44,7 @@ cmake -S windows -B windows/build -G "Visual Studio 17 2022" -A x64
 cmake --build windows/build --config Release
 ```
 
-The output is `windows/build/Release/CursorUsage.exe`. MinGW cross-build instructions are in [windows/README.md](windows/README.md).
+The output is `windows/build/Release/AI-Usage-Extension.exe`. MinGW cross-build instructions are in [windows/README.md](windows/README.md).
 
 ## Authentication and privacy
 
@@ -76,7 +76,7 @@ For bug reports, include your OS version, GNOME Shell version if relevant, relea
 
 ## Development and releases
 
-The GNOME code is in `extension.js`, `prefs.js`, and `stylesheet.css`. The Windows C++17 Win32 code is in `windows/`. GitHub Actions checks JavaScript syntax and the GNOME schema, builds both packages, and publishes assets when a `v*` tag is pushed.
+The GNOME code is in `extension.js`, `prefs.js`, and `stylesheet.css`. The Windows C++17 Win32 code is in `windows/`. GitHub Actions checks JavaScript syntax and the GNOME schema, builds both packages, runs CodeQL on C++ and JavaScript, and publishes assets when a `v*` tag is pushed. A release is published only after those jobs pass.
 
 ## Disclaimer and license
 

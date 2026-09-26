@@ -2,6 +2,8 @@
 
 Floating desktop widget for Windows showing **Cursor**, **Claude**, and **Codex** usage.
 
+Supports Windows 10 and Windows 11. The release executable is `AI-Usage-Extension.exe`.
+
 ## Features
 
 - Compact pill (ring + %) that expands to all enabled providers

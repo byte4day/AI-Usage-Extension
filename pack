@@ -14,6 +14,8 @@ gnome-extensions pack -f \
 	--extra-source=icons
 
 zip_name="$(ls -1 ./*.shell-extension.zip | head -n1)"
+mv -- "$zip_name" AI-Usage-Extension.zip
+zip_name=AI-Usage-Extension.zip
 echo "Created: $repo_dir/$zip_name"
 echo "Upload that file at https://extensions.gnome.org/upload/"
 unzip -l "$zip_name"
