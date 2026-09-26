@@ -38,9 +38,9 @@
 /* No cards, no charts, no frames: a title line and two meters per provider,
    with everything optional hidden until it has something to say. */
 .cu-popup {
-    width: 288px;
-    spacing: 10px;
-    padding: 2px 4px;
+    width: 320px;
+    spacing: 12px;
+    padding: 4px 6px;
 }
 
 .cu-provider {
@@ -85,13 +85,13 @@
 }
 
 .cu-meter-name {
-    min-width: 54px;
-    font-size: 8.5pt;
-    color: rgba(160, 160, 160, 1.0);
+    min-width: 56px;
+    font-size: 9pt;
+    color: rgba(190, 190, 190, 1.0);
 }
 
 .cu-meter-pct {
-    min-width: 32px;
+    min-width: 40px;
     font-feature-settings: "tnum";
     font-size: 8.5pt;
     font-weight: 600;
@@ -107,8 +107,8 @@
 }
 
 .cu-caption {
-    font-size: 8pt;
-    color: rgba(150, 150, 150, 1.0);
+    font-size: 8.5pt;
+    color: rgba(190, 190, 190, 1.0);
 }
 
 .cu-track {

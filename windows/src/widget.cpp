@@ -406,7 +406,7 @@ void ApplySettings(SettingsState* state) {
 
   GetWindowTextW(state->refreshEdit, buf, 64);
   int interval = WideToInt(buf);
-  cfg.refreshIntervalSec = (std::max)(10, interval > 0 ? interval : 300);
+  cfg.refreshIntervalSec = (std::clamp)(interval > 0 ? interval : 300, 10, 86400);
 
   auto checked = [](HWND h) { return SendMessageW(h, BM_GETCHECK, 0, 0) == BST_CHECKED; };
   cfg.showBilling = checked(state->billingCheck);

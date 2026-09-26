@@ -17,12 +17,17 @@ double ClampPct(double v) {
   return (std::min)(100.0, (std::max)(0.0, v));
 }
 
-static double PctFromMessage(const std::string& msg) {
+static std::optional<double> PctFromMessage(const std::string& msg) {
   static const std::regex re(R"(([\d.]+)\s*%)");
   std::smatch m;
-  if (std::regex_search(msg, m, re))
-    return ClampPct(std::stod(m[1].str()));
-  return 0;
+  if (std::regex_search(msg, m, re)) {
+    try {
+      return ClampPct(std::stod(m[1].str()));
+    } catch (...) {
+      return std::nullopt;
+    }
+  }
+  return std::nullopt;
 }
 
 static ProviderUsage NormalizeCursor(const std::string& json, bool showBilling) {
@@ -39,15 +44,19 @@ static ProviderUsage NormalizeCursor(const std::string& json, bool showBilling) 
   auto autoRaw = JsonNumber(plan, "autoPercentUsed");
   auto apiRaw = JsonNumber(plan, "apiPercentUsed");
   auto totalRaw = JsonNumber(plan, "totalPercentUsed");
+  const auto autoMsg = PctFromMessage(JsonString(json, "autoModelSelectedDisplayMessage"));
+  const auto apiMsg = PctFromMessage(JsonString(json, "namedModelSelectedDisplayMessage"));
+  const bool hasAuto = autoRaw.has_value() || autoMsg.has_value();
+  const bool hasApi = apiRaw.has_value() || apiMsg.has_value();
   double autoU = autoRaw ? ClampPct(*autoRaw)
-                         : PctFromMessage(JsonString(json, "autoModelSelectedDisplayMessage"));
+                         : autoMsg.value_or(0);
   double apiU = apiRaw ? ClampPct(*apiRaw)
-                       : PctFromMessage(JsonString(json, "namedModelSelectedDisplayMessage"));
+                       : apiMsg.value_or(0);
   double totalU = totalRaw ? ClampPct(*totalRaw) : (std::max)(autoU, apiU);
 
-  u.a = {autoU, end, false};
-  u.b = {apiU, end, false};
-  u.total = {totalU, end, false};
+  u.a = {autoU, end, !hasAuto};
+  u.b = {apiU, end, !hasApi};
+  u.total = {totalU, end, !totalRaw.has_value() && !hasAuto && !hasApi};
 
   if (showBilling) {
     std::string parts;
@@ -115,10 +124,10 @@ static ProviderUsage NormalizeCodex(const std::string& json, bool showBilling) {
   auto secondary = JsonObject(rate, "secondary_window");
 
   auto fromWin = [](const std::string& win) -> Pool {
-    if (win.empty() || win == "null")
+    if (win.empty() || win == "null" || !JsonNumber(win, "used_percent"))
       return {0, {}, true};
     Pool p;
-    p.utilization = ClampPct(JsonNumber(win, "used_percent").value_or(0));
+    p.utilization = ClampPct(*JsonNumber(win, "used_percent"));
     if (auto reset = JsonNumber(win, "reset_at"))
       p.resetsAt = "unix:" + std::to_string(static_cast<long long>(*reset));
     return p;
@@ -263,7 +272,9 @@ const Pool* SelectPool(const ProviderUsage& data, const std::string& panelWindow
 }
 
 const ProviderUsage* SelectProvider(const AllUsage& all, const Config& config) {
-  auto usable = [](const ProviderUsage& p) { return p.ok; };
+  auto usable = [&](const ProviderUsage& p) {
+    return p.ok && (p.isUnlimited || SelectPool(p, config.panelWindow) != nullptr);
+  };
   if (config.panelProvider == "cursor" && usable(all.cursor))
     return &all.cursor;
   if (config.panelProvider == "claude" && usable(all.claude))

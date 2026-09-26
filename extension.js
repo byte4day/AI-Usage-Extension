@@ -109,7 +109,7 @@ function relativeReset(isoOrUnix) {
 
 function statusLabel(status) {
     if (status === 401 || status === 403)
-        return 'Run claude to re-auth';
+        return 'Session expired — sign in again';
     if (status === 404)
         return 'Not available';
     if (status === 429)
@@ -618,7 +618,7 @@ class CursorUsageIndicator extends PanelMenu.Button {
     _startTimer() {
         this._timerId = GLib.timeout_add_seconds(
             GLib.PRIORITY_DEFAULT,
-            this._settings.get_int('refresh-interval'),
+            Math.max(10, Math.min(86400, this._settings.get_int('refresh-interval'))),
             () => {
                 this._refreshUsage();
                 return GLib.SOURCE_CONTINUE;
@@ -664,7 +664,8 @@ class CursorUsageIndicator extends PanelMenu.Button {
     _doneOne() {
         this._pending = Math.max(0, this._pending - 1);
         if (this._pending === 0)
-            this._stamp(true);
+            this._stamp(PROVIDER_IDS.some(id =>
+                this._settings.get_boolean(`show-${id}`) && this._last[id]));
     }
 
     // --- Cursor ---
@@ -783,16 +784,23 @@ class CursorUsageIndicator extends PanelMenu.Button {
             const m = `${msg ?? ''}`.match(/([\d.]+)\s*%/);
             return m ? Number(m[1]) : null;
         };
-        const auto = pct(plan.autoPercentUsed ?? fromMsg(data.autoModelSelectedDisplayMessage));
-        const api = pct(plan.apiPercentUsed ?? fromMsg(data.namedModelSelectedDisplayMessage));
-        const total = pct(plan.totalPercentUsed ?? Math.max(auto, api));
+        const autoRaw = plan.autoPercentUsed ?? fromMsg(data.autoModelSelectedDisplayMessage);
+        const apiRaw = plan.apiPercentUsed ?? fromMsg(data.namedModelSelectedDisplayMessage);
+        const auto = pct(autoRaw);
+        const api = pct(apiRaw);
+        const totalRaw = plan.totalPercentUsed;
+        const hasTotal = Number.isFinite(totalRaw) ||
+            Number.isFinite(autoRaw) || Number.isFinite(apiRaw);
+        const total = pct(totalRaw ?? Math.max(auto, api));
         return {
             id: 'cursor',
             tier: planLabel(data.membershipType, 'CURSOR'),
             isUnlimited: !!data.isUnlimited,
-            a: {name: 'Auto', utilization: auto, resets_at: end},
-            b: {name: 'API', utilization: api, resets_at: end},
-            total: {utilization: total, resets_at: end},
+            a: {name: 'Auto', utilization: auto, resets_at: end,
+                missing: !Number.isFinite(autoRaw)},
+            b: {name: 'API', utilization: api, resets_at: end,
+                missing: !Number.isFinite(apiRaw)},
+            total: {utilization: total, resets_at: end, missing: !hasTotal},
             billing: (() => {
                 if (!this._settings.get_boolean('show-billing'))
                     return '';
@@ -978,7 +986,8 @@ class CursorUsageIndicator extends PanelMenu.Button {
                     this._retryClaudeAfterRefresh(tier, cancellable, err);
                     return;
                 }
-                this._setProviderUnavailable('claude', err);
+                this._setProviderUnavailable('claude',
+                    status === 401 || status === 403 ? 'Run claude to re-auth' : err);
                 this._doneOne();
                 return;
             }
@@ -1112,7 +1121,7 @@ class CursorUsageIndicator extends PanelMenu.Button {
         const primary = data.rate_limit?.primary_window ?? null;
         const secondary = data.rate_limit?.secondary_window ?? null;
         const toPool = (win, name) => {
-            if (!win)
+            if (!win || !Number.isFinite(win.used_percent))
                 return null;
             return {
                 name,
@@ -1158,6 +1167,8 @@ class CursorUsageIndicator extends PanelMenu.Button {
             (session, result) => {
                 try {
                     const bytes = session.send_and_read_finish(result);
+                    if (cancellable.is_cancelled())
+                        return;
                     if (message.status_code !== 200) {
                         cb(false, null, statusLabel(message.status_code),
                             message.status_code);
@@ -1250,11 +1261,14 @@ class CursorUsageIndicator extends PanelMenu.Button {
     _selectedSnapshot() {
         const mode = this._settings.get_string('panel-provider');
         const enabled = [];
-        if (this._settings.get_boolean('show-cursor') && this._last.cursor)
+        if (this._settings.get_boolean('show-cursor') && this._last.cursor &&
+            (this._last.cursor.isUnlimited || this._poolFromSnap(this._last.cursor)))
             enabled.push(this._last.cursor);
-        if (this._settings.get_boolean('show-claude') && this._last.claude)
+        if (this._settings.get_boolean('show-claude') && this._last.claude &&
+            (this._last.claude.isUnlimited || this._poolFromSnap(this._last.claude)))
             enabled.push(this._last.claude);
-        if (this._settings.get_boolean('show-codex') && this._last.codex)
+        if (this._settings.get_boolean('show-codex') && this._last.codex &&
+            (this._last.codex.isUnlimited || this._poolFromSnap(this._last.codex)))
             enabled.push(this._last.codex);
         if (!enabled.length)
             return null;

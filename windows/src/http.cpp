@@ -104,16 +104,35 @@ HttpResponse HttpRequest(const std::wstring& method, const std::wstring& host,
 
   DWORD status = 0;
   DWORD statusSize = sizeof(status);
-  WinHttpQueryHeaders(request, WINHTTP_QUERY_STATUS_CODE | WINHTTP_QUERY_FLAG_NUMBER,
-                      WINHTTP_HEADER_NAME_BY_INDEX, &status, &statusSize, WINHTTP_NO_HEADER_INDEX);
+  if (!WinHttpQueryHeaders(request, WINHTTP_QUERY_STATUS_CODE | WINHTTP_QUERY_FLAG_NUMBER,
+                           WINHTTP_HEADER_NAME_BY_INDEX, &status, &statusSize,
+                           WINHTTP_NO_HEADER_INDEX)) {
+    out.error = "Invalid HTTP response";
+    return out;
+  }
   out.status = static_cast<long>(status);
 
+  // Usage endpoints return small JSON objects. Bound a faulty or hostile reply
+  // before allocating a buffer from the server-reported available byte count.
+  constexpr size_t kMaxResponseBytes = 2 * 1024 * 1024;
   DWORD avail = 0;
-  while (WinHttpQueryDataAvailable(request, &avail) && avail > 0) {
+  for (;;) {
+    if (!WinHttpQueryDataAvailable(request, &avail)) {
+      out.error = "Response read failed";
+      return out;
+    }
+    if (avail == 0)
+      break;
+    if (avail > kMaxResponseBytes - out.body.size()) {
+      out.error = "Response too large";
+      return out;
+    }
     std::vector<char> buf(avail);
     DWORD read = 0;
-    if (!WinHttpReadData(request, buf.data(), avail, &read) || read == 0)
-      break;
+    if (!WinHttpReadData(request, buf.data(), avail, &read) || read == 0) {
+      out.error = "Response read failed";
+      return out;
+    }
     out.body.append(buf.data(), read);
   }
   return out;

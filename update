@@ -10,16 +10,15 @@ if [ "$repo_dir" = "$target_dir" ]; then
 	exit 1
 fi
 
-# Remove legacy install path from earlier UUID
-rm -rf "$HOME/.local/share/gnome-shell/extensions/cursor-usage@byte4day"
-
 rm -rf "$target_dir"
 mkdir -p "$(dirname "$target_dir")"
-cp -a "$repo_dir"/. "$target_dir"
-# The Windows widget and its build tree are not part of the shell extension.
-rm -rf "$target_dir/.git" "$target_dir/.github" "$target_dir/windows"
-rm -f "$target_dir"/*.shell-extension.zip "$target_dir"/*.zip
-rm -f "$target_dir/schemas/gschemas.compiled"
+mkdir -p "$target_dir/schemas"
+cp -a "$repo_dir/extension.js" "$repo_dir/prefs.js" \
+  "$repo_dir/stylesheet.css" "$repo_dir/metadata.json" \
+  "$repo_dir/icon.png" "$repo_dir/icon-22.png" "$target_dir/"
+cp -a "$repo_dir/icons" "$target_dir/"
+cp -a "$repo_dir/schemas/org.gnome.shell.extensions.cursor-usage.gschema.xml" \
+  "$target_dir/schemas/"
 glib-compile-schemas "$target_dir/schemas"
 
 echo "Installed to $target_dir"
