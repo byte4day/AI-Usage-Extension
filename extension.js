@@ -694,6 +694,8 @@ class CursorUsageIndicator extends PanelMenu.Button {
             authFile.load_contents_async(cancellable, (file, result) => {
                 try {
                     const [, contents] = file.load_contents_finish(result);
+                    if (cancellable.is_cancelled())
+                        return;
                     const auth = JSON.parse(new TextDecoder('utf-8').decode(contents));
                     const token = auth.accessToken ?? auth.access_token ?? null;
                     if (!token) {
@@ -732,6 +734,8 @@ class CursorUsageIndicator extends PanelMenu.Button {
                 this._tokenProc = null;
                 try {
                     const [, stdout] = proc.communicate_utf8_finish(result);
+                    if (cancellable.is_cancelled())
+                        return;
                     const token = (stdout ?? '').trim();
                     if (!token) {
                         this._setProviderUnavailable('cursor', 'No auth');
@@ -841,6 +845,8 @@ class CursorUsageIndicator extends PanelMenu.Button {
         file.load_contents_async(cancellable, (_f, result) => {
             try {
                 const [, contents] = file.load_contents_finish(result);
+                if (cancellable.is_cancelled())
+                    return;
                 const auth = JSON.parse(new TextDecoder('utf-8').decode(contents));
                 const oauth = auth.claudeAiOauth ?? auth ?? null;
                 const token = oauth?.accessToken ?? null;
@@ -856,9 +862,15 @@ class CursorUsageIndicator extends PanelMenu.Button {
                 // A stored token that has aged out used to leave the menu stuck
                 // on "HTTP 401" until the user next ran the CLI by hand.
                 if (expired && oauth.refreshToken) {
-                    this._renewClaudeToken(auth, cancellable, fresh => {
+                    this._renewClaudeToken(auth, cancellable, (fresh, err) => {
                         if (cancellable.is_cancelled())
                             return;
+                        if (err === 'Cannot save token') {
+                            this._setProviderUnavailable('claude',
+                                'Cannot save token — run claude');
+                            this._doneOne();
+                            return;
+                        }
                         // If the renewal could not happen -- clock skew, or the
                         // token endpoint briefly unreachable -- the stored token
                         // may well still be accepted, so try it rather than
@@ -881,8 +893,7 @@ class CursorUsageIndicator extends PanelMenu.Button {
 
     // Exchanges the stored refresh token for a new access token and saves the
     // rotated pair back. The server invalidates the old refresh token as soon
-    // as it answers, so if the write fails we deliberately discard the new
-    // token rather than silently log the CLI out on its next start.
+    // as it answers. A failed save can require a new CLI sign-in, so surface it.
     _renewClaudeToken(auth, cancellable, cb) {
         if (this._claudeRenewing) {
             cb(null, 'Refreshing');
@@ -1077,6 +1088,8 @@ class CursorUsageIndicator extends PanelMenu.Button {
         file.load_contents_async(cancellable, (_f, result) => {
             try {
                 const [, contents] = file.load_contents_finish(result);
+                if (cancellable.is_cancelled())
+                    return;
                 const auth = JSON.parse(new TextDecoder('utf-8').decode(contents));
                 const token = auth.tokens?.access_token ?? auth.access_token ?? null;
                 const accountId = auth.tokens?.account_id ?? auth.account_id ?? null;

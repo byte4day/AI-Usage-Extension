@@ -27,10 +27,9 @@ on `HTTP 401` until you next ran `claude` by hand. It now renews the token with
 the stored refresh token and writes the rotated pair back to the same store it
 came from, preserving every other field in the file.
 
-Because the server invalidates the old refresh token the moment it answers, the
-widget only keeps a renewed token if it managed to save it. If the write fails
-it discards the new token instead, so a failed renewal can never log the CLI
-out.
+The server may invalidate the old refresh token when it answers. If the widget
+cannot save the rotated token, you may need to sign in to Claude Code again.
+Keep the credential store writable.
 
 ## Build
 

@@ -337,9 +337,8 @@ std::optional<ClaudeCred> RefreshStore(CredStore& store, const std::wstring& pro
   const int64_t expiresAt = UnixMillisNow() + static_cast<int64_t>(expiresIn) * 1000;
 
   auto updated = SpliceRotated(store.raw, fresh, rotated, expiresAt);
-  // The server has already invalidated the old refresh token. If we cannot save
-  // the rotated one, using the new access token would silently log the CLI out
-  // on its next start, so bail instead and leave the stored credentials alone.
+  // The server may already have invalidated the old refresh token. Surface a
+  // failed save so the user knows a fresh Claude CLI sign-in may be required.
   if (!updated || !PersistStore(store, *updated)) {
     if (reason)
       *reason = "Cannot save token";
