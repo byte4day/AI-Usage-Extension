@@ -29,6 +29,7 @@ if(MINGW)
 endif()
 
 add_executable(CursorUsage WIN32 ${CURSOR_USAGE_SOURCES})
+set_target_properties(CursorUsage PROPERTIES OUTPUT_NAME "AI-Usage-Extension")
 
 target_include_directories(CursorUsage PRIVATE src)
 

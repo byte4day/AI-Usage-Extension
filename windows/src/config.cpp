@@ -46,7 +46,7 @@ void Config::Load() {
 
     try {
       if (key == "refresh_interval")
-        refreshIntervalSec = (std::max)(10, std::stoi(val));
+        refreshIntervalSec = (std::clamp)(std::stoi(val), 10, 86400);
       else if (key == "panel_provider")
         panelProvider = val;
       else if (key == "panel_window")

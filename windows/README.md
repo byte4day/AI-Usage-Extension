@@ -2,6 +2,8 @@
 
 Floating desktop widget for Windows showing **Cursor**, **Claude**, and **Codex** usage.
 
+Supports Windows 10 and Windows 11. The release executable is `AI-Usage-Extension.exe`.
+
 ## Features
 
 - Compact pill (ring + %) that expands to all enabled providers
@@ -16,7 +18,7 @@ No separate sign-in: the widget reads whatever the CLIs already stored.
 
 | Provider | Source |
 | --- | --- |
-| Cursor | `%USERPROFILE%\.cursor\auth.json`, `CURSOR_SESSION_TOKEN`, or `%APPDATA%\Cursor\...\state.vscdb` |
+| Cursor | `%USERPROFILE%\.cursor\auth.json`, `CURSOR_SESSION_TOKEN`, or `%APPDATA%\Cursor\...\state.vscdb` (requires `sqlite3.exe` on `PATH`) |
 | Claude | `CLAUDE_CODE_OAUTH_TOKEN`, any `.credentials.json` Claude Code writes (`%USERPROFILE%\.claude`, `%APPDATA%\Claude`, `%LOCALAPPDATA%\Claude`), or the Windows Credential Manager |
 | Codex | `%USERPROFILE%\.codex\auth.json` |
 
@@ -27,10 +29,9 @@ on `HTTP 401` until you next ran `claude` by hand. It now renews the token with
 the stored refresh token and writes the rotated pair back to the same store it
 came from, preserving every other field in the file.
 
-Because the server invalidates the old refresh token the moment it answers, the
-widget only keeps a renewed token if it managed to save it. If the write fails
-it discards the new token instead, so a failed renewal can never log the CLI
-out.
+The server may invalidate the old refresh token when it answers. If the widget
+cannot save the rotated token, you may need to sign in to Claude Code again.
+Keep the credential store writable.
 
 ## Build
 

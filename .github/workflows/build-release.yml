@@ -1,0 +1,92 @@
+name: Build and release
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+    tags: ['v*']
+
+permissions:
+  contents: read
+
+jobs:
+  linux:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Validate and package GNOME extension
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libglib2.0-bin zip
+          node --check extension.js
+          node --check prefs.js
+          glib-compile-schemas --strict --dry-run schemas
+          glib-compile-schemas schemas
+          mkdir -p dist
+          zip -q -r "dist/AI-Usage-Extension.zip" \
+            extension.js prefs.js stylesheet.css metadata.json \
+            icon.png icon-22.png icons schemas/gschemas.compiled
+          unzip -t "dist/AI-Usage-Extension.zip"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: linux-extension
+          path: dist/*.zip
+          if-no-files-found: error
+
+  windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build Windows widget
+        run: |
+          cmake -S windows -B windows/build -G "Visual Studio 17 2022" -A x64
+          cmake --build windows/build --config Release
+      - uses: actions/upload-artifact@v4
+        with:
+          name: windows-widget
+          path: windows/build/Release/AI-Usage-Extension.exe
+          if-no-files-found: error
+
+  security:
+    name: CodeQL (${{ matrix.language }})
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      security-events: write
+      actions: read
+    strategy:
+      fail-fast: false
+      matrix:
+        language: [c-cpp, javascript-typescript]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: github/codeql-action/init@v4
+        with:
+          languages: ${{ matrix.language }}
+          build-mode: none
+          queries: security-extended
+      - uses: github/codeql-action/analyze@v4
+        with:
+          category: /language:${{ matrix.language }}
+
+  release:
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: [linux, windows, security]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+      - name: Publish release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          cd dist
+          sha256sum AI-Usage-Extension.zip AI-Usage-Extension.exe > SHA256SUMS.txt
+          gh release create "$GITHUB_REF_NAME" \
+            AI-Usage-Extension.zip \
+            AI-Usage-Extension.exe SHA256SUMS.txt \
+            --repo "$GITHUB_REPOSITORY" --verify-tag --generate-notes
