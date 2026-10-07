@@ -5,6 +5,7 @@
 #include <windows.h>
 #include <wincred.h>
 
+#include <algorithm>
 #include <string>
 #include <vector>
 
@@ -65,13 +66,41 @@ static std::optional<std::string> TokenFromSqlite(const std::wstring& dbPath) {
     return std::nullopt;
   }
 
+  // Never block forever on ReadFile — a locked state.vscdb or hung sqlite3 used
+  // to freeze the refresh worker and leave the tray stuck on "updating…".
   std::string out;
   char buf[4096];
-  DWORD n = 0;
-  while (ReadFile(readPipe, buf, sizeof(buf), &n, nullptr) && n > 0)
+  const DWORD deadline = GetTickCount() + 5000;
+  bool alive = true;
+  while (alive && GetTickCount() < deadline) {
+    DWORD avail = 0;
+    if (!PeekNamedPipe(readPipe, nullptr, 0, nullptr, &avail, nullptr))
+      break;
+    if (avail > 0) {
+      DWORD n = 0;
+      const DWORD want = (std::min)(avail, static_cast<DWORD>(sizeof(buf)));
+      if (!ReadFile(readPipe, buf, want, &n, nullptr) || n == 0)
+        break;
+      out.append(buf, buf + n);
+      continue;
+    }
+    const DWORD wait = WaitForSingleObject(pi.hProcess, 50);
+    if (wait == WAIT_OBJECT_0)
+      alive = false;
+  }
+  if (WaitForSingleObject(pi.hProcess, 0) != WAIT_OBJECT_0) {
+    TerminateProcess(pi.hProcess, 1);
+    WaitForSingleObject(pi.hProcess, 1000);
+  }
+  DWORD avail = 0;
+  while (PeekNamedPipe(readPipe, nullptr, 0, nullptr, &avail, nullptr) && avail > 0) {
+    DWORD n = 0;
+    const DWORD want = (std::min)(avail, static_cast<DWORD>(sizeof(buf)));
+    if (!ReadFile(readPipe, buf, want, &n, nullptr) || n == 0)
+      break;
     out.append(buf, buf + n);
+  }
 
-  WaitForSingleObject(pi.hProcess, 5000);
   CloseHandle(pi.hThread);
   CloseHandle(pi.hProcess);
   CloseHandle(readPipe);
@@ -125,8 +154,9 @@ std::optional<std::string> SessionCookieFromToken(const std::string& accessToken
 
 namespace {
 
-// Public client id the Claude Code CLI itself uses for its OAuth flow.
-constexpr wchar_t kClaudeTokenHost[] = L"console.anthropic.com";
+// Claude Code refreshes against api.anthropic.com — console.anthropic.com
+// rate-limits this client id and leaves the widget stuck on expired auth.
+constexpr wchar_t kClaudeTokenHost[] = L"api.anthropic.com";
 constexpr wchar_t kClaudeTokenPath[] = L"/v1/oauth/token";
 constexpr char kClaudeClientId[] = "9d1c250a-e61b-44d9-88ed-5944d1962f5e";
 
@@ -295,7 +325,20 @@ std::optional<std::string> SpliceRotated(const std::string& raw, const std::stri
     return std::nullopt;
   if (!refreshToken.empty())
     JsonSetString(body, "refreshToken", refreshToken);
-  JsonSetNumber(body, "expiresAt", expiresAtMs);
+  if (!JsonSetNumber(body, "expiresAt", expiresAtMs)) {
+    // Older dumps omit expiresAt; insert it so the next launch renews on time.
+    const auto close = body.rfind('}');
+    if (close == std::string::npos)
+      return std::nullopt;
+    std::string insert = "\"expiresAt\":" + std::to_string(expiresAtMs);
+    size_t i = close;
+    while (i > 0 && (body[i - 1] == ' ' || body[i - 1] == '\n' || body[i - 1] == '\r' ||
+                     body[i - 1] == '\t'))
+      --i;
+    if (i > 0 && body[i - 1] != '{' && body[i - 1] != ',')
+      insert = "," + insert;
+    body.insert(close, insert);
+  }
 
   doc.replace(begin, end - begin, body);
   return doc;
@@ -413,9 +456,16 @@ std::optional<ClaudeCred> ResolveClaudeCred(const std::wstring& proxyUrl, std::s
     if (token.empty())
       continue;
 
-    const auto expiresAt = JsonNumber(section, "expiresAt");
-    const bool expired = force || (expiresAt && *expiresAt > 0 &&
-                                   static_cast<int64_t>(*expiresAt) - kExpirySkewMs <= now);
+    const auto expiresAtRaw = JsonNumber(section, "expiresAt");
+    // Claude stores expiresAt in ms; older dumps sometimes used seconds.
+    int64_t expiresAtMs = 0;
+    if (expiresAtRaw && *expiresAtRaw > 0) {
+      expiresAtMs = static_cast<int64_t>(*expiresAtRaw);
+      if (expiresAtMs < 1'000'000'000'000LL)
+        expiresAtMs *= 1000;
+    }
+    const bool expired =
+        force || (expiresAtMs > 0 && expiresAtMs - kExpirySkewMs <= now);
     if (!expired)
       return ClaudeCred{token, JsonString(section, "subscriptionType"), false};
 

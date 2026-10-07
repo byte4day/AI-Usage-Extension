@@ -3,8 +3,9 @@
   <schema id="org.gnome.shell.extensions.cursor-usage" path="/org/gnome/shell/extensions/cursor-usage/">
     <key name="refresh-interval" type="i">
       <default>300</default>
+      <range min="10" max="600"/>
       <summary>Refresh interval</summary>
-      <description>How often to refresh usage data in seconds</description>
+      <description>How often to refresh usage data in seconds (10–600)</description>
     </key>
     <key name="display-mode" type="s">
       <default>'ring'</default>
