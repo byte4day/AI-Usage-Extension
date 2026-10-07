@@ -16,7 +16,7 @@ No separate sign-in: the widget reads whatever the CLIs already stored.
 
 | Provider | Source |
 | --- | --- |
-| Cursor | `%USERPROFILE%\.cursor\auth.json`, `CURSOR_SESSION_TOKEN`, or `%APPDATA%\Cursor\...\state.vscdb` |
+| Cursor | `%USERPROFILE%\.cursor\auth.json`, `CURSOR_SESSION_TOKEN`, or `%APPDATA%\Cursor\...\state.vscdb` (desktop DB path needs `sqlite3.exe` on PATH) |
 | Claude | `CLAUDE_CODE_OAUTH_TOKEN`, any `.credentials.json` Claude Code writes (`%USERPROFILE%\.claude`, `%APPDATA%\Claude`, `%LOCALAPPDATA%\Claude`), or the Windows Credential Manager |
 | Codex | `%USERPROFILE%\.codex\auth.json` |
 

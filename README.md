@@ -24,7 +24,7 @@ Minimal top-panel extension for GNOME Shell 46–50.
 
 | Provider | Source |
 | --- | --- |
-| Cursor | `~/.config/cursor/auth.json`, `CURSOR_SESSION_TOKEN`, or desktop `state.vscdb` |
+| Cursor | `~/.cursor/auth.json`, `$XDG_CONFIG_HOME/cursor/auth.json`, `CURSOR_SESSION_TOKEN`, or desktop `state.vscdb` (needs `sqlite3` on PATH) |
 | Claude | `~/.claude/.credentials.json` or `CLAUDE_CODE_OAUTH_TOKEN` |
 | Codex | `~/.codex/auth.json` |
 

@@ -107,9 +107,16 @@ function relativeReset(isoOrUnix) {
     return `in ${humanDuration(diff / 1000)}`;
 }
 
-function statusLabel(status) {
-    if (status === 401 || status === 403)
-        return 'Run claude to re-auth';
+function statusLabel(status, provider = null) {
+    if (status === 401 || status === 403) {
+        if (provider === 'claude')
+            return 'Run claude to re-auth';
+        if (provider === 'cursor')
+            return 'Cursor login required';
+        if (provider === 'codex')
+            return 'Run codex login';
+        return 'Session expired';
+    }
     if (status === 404)
         return 'Not available';
     if (status === 429)
@@ -616,9 +623,10 @@ class CursorUsageIndicator extends PanelMenu.Button {
     }
 
     _startTimer() {
+        const interval = Math.min(600, Math.max(10, this._settings.get_int('refresh-interval')));
         this._timerId = GLib.timeout_add_seconds(
             GLib.PRIORITY_DEFAULT,
-            this._settings.get_int('refresh-interval'),
+            interval,
             () => {
                 this._refreshUsage();
                 return GLib.SOURCE_CONTINUE;
@@ -669,13 +677,17 @@ class CursorUsageIndicator extends PanelMenu.Button {
 
     // --- Cursor ---
 
-    _cliAuthPath() {
-        return GLib.build_filenamev([GLib.get_home_dir(), '.config', 'cursor', 'auth.json']);
+    _cliAuthPaths() {
+        // Cursor CLI writes ~/.cursor/auth.json; some installs also use XDG config.
+        return [
+            GLib.build_filenamev([GLib.get_home_dir(), '.cursor', 'auth.json']),
+            GLib.build_filenamev([GLib.get_user_config_dir(), 'cursor', 'auth.json']),
+        ];
     }
 
     _desktopDbPath() {
         return GLib.build_filenamev([
-            GLib.get_home_dir(), '.config', 'Cursor', 'User', 'globalStorage', 'state.vscdb',
+            GLib.get_user_config_dir(), 'Cursor', 'User', 'globalStorage', 'state.vscdb',
         ]);
     }
 
@@ -688,27 +700,36 @@ class CursorUsageIndicator extends PanelMenu.Button {
             this._fetchCursor(token, cancellable);
             return;
         }
-        const authFile = Gio.File.new_for_path(this._cliAuthPath());
-        if (authFile.query_exists(null)) {
-            authFile.load_contents_async(cancellable, (file, result) => {
-                try {
-                    const [, contents] = file.load_contents_finish(result);
-                    const auth = JSON.parse(new TextDecoder('utf-8').decode(contents));
-                    const token = auth.accessToken ?? auth.access_token ?? null;
-                    if (!token) {
-                        this._tryDesktopToken(cancellable);
-                        return;
-                    }
-                    this._fetchCursor(token, cancellable);
-                } catch (_e) {
-                    if (cancellable.is_cancelled())
-                        return;
-                    this._tryDesktopToken(cancellable);
-                }
-            });
+        this._loadCursorAuthFile(0, cancellable);
+    }
+
+    _loadCursorAuthFile(index, cancellable) {
+        const paths = this._cliAuthPaths();
+        if (index >= paths.length) {
+            this._tryDesktopToken(cancellable);
             return;
         }
-        this._tryDesktopToken(cancellable);
+        const authFile = Gio.File.new_for_path(paths[index]);
+        if (!authFile.query_exists(null)) {
+            this._loadCursorAuthFile(index + 1, cancellable);
+            return;
+        }
+        authFile.load_contents_async(cancellable, (_file, result) => {
+            try {
+                const [, contents] = authFile.load_contents_finish(result);
+                const auth = JSON.parse(new TextDecoder('utf-8').decode(contents));
+                const token = auth.accessToken ?? auth.access_token ?? null;
+                if (!token) {
+                    this._loadCursorAuthFile(index + 1, cancellable);
+                    return;
+                }
+                this._fetchCursor(token, cancellable);
+            } catch (_e) {
+                if (cancellable.is_cancelled())
+                    return;
+                this._loadCursorAuthFile(index + 1, cancellable);
+            }
+        });
     }
 
     _tryDesktopToken(cancellable) {
@@ -741,12 +762,12 @@ class CursorUsageIndicator extends PanelMenu.Button {
                 } catch (_e) {
                     if (cancellable.is_cancelled())
                         return;
-                    this._setProviderUnavailable('cursor', 'No auth');
+                    this._setProviderUnavailable('cursor', 'Install sqlite3 or login via CLI');
                     this._doneOne();
                 }
             });
         } catch (_e) {
-            this._setProviderUnavailable('cursor', 'No auth');
+            this._setProviderUnavailable('cursor', 'Install sqlite3 or login via CLI');
             this._doneOne();
         }
     }
@@ -772,7 +793,7 @@ class CursorUsageIndicator extends PanelMenu.Button {
             this._renderPanel();
             this._scheduleCountdown();
             this._doneOne();
-        });
+        }, 'cursor');
     }
 
     _normalizeCursor(data) {
@@ -906,7 +927,11 @@ class CursorUsageIndicator extends PanelMenu.Button {
             cancellable,
             (session, result) => {
                 try {
+                    if (cancellable.is_cancelled())
+                        return;
                     const bytes = session.send_and_read_finish(result);
+                    if (cancellable.is_cancelled())
+                        return;
                     if (message.status_code !== 200) {
                         let err = `HTTP ${message.status_code}`;
                         if (message.status_code === 429)
@@ -922,6 +947,8 @@ class CursorUsageIndicator extends PanelMenu.Button {
                         done(null, 'Refresh rejected');
                         return;
                     }
+                    if (cancellable.is_cancelled())
+                        return;
                     const next = {...oauth, accessToken: data.access_token};
                     if (data.refresh_token)
                         next.refreshToken = data.refresh_token;
@@ -987,7 +1014,7 @@ class CursorUsageIndicator extends PanelMenu.Button {
             this._renderPanel();
             this._scheduleCountdown();
             this._doneOne();
-        });
+        }, 'claude');
     }
 
     _retryClaudeAfterRefresh(tier, cancellable, previousError) {
@@ -1105,7 +1132,7 @@ class CursorUsageIndicator extends PanelMenu.Button {
             this._renderPanel();
             this._scheduleCountdown();
             this._doneOne();
-        });
+        }, 'codex');
     }
 
     _normalizeCodex(data) {
@@ -1147,7 +1174,7 @@ class CursorUsageIndicator extends PanelMenu.Button {
 
     // --- HTTP ---
 
-    _httpGet(url, headers, cancellable, cb) {
+    _httpGet(url, headers, cancellable, cb, provider = null) {
         const message = Soup.Message.new('GET', url);
         for (const [k, v] of Object.entries(headers))
             message.request_headers.append(k, v);
@@ -1156,10 +1183,16 @@ class CursorUsageIndicator extends PanelMenu.Button {
             GLib.PRIORITY_DEFAULT,
             cancellable,
             (session, result) => {
+                // A newer refresh cancels this one — drop the result so stale
+                // usage cannot overwrite fresher data or steal _doneOne ticks.
+                if (cancellable.is_cancelled())
+                    return;
                 try {
                     const bytes = session.send_and_read_finish(result);
+                    if (cancellable.is_cancelled())
+                        return;
                     if (message.status_code !== 200) {
-                        cb(false, null, statusLabel(message.status_code),
+                        cb(false, null, statusLabel(message.status_code, provider),
                             message.status_code);
                         return;
                     }
